@@ -5,10 +5,14 @@ import { UpdateArticleDto } from './dto/update-article.dto';
 import { Category } from 'src/categories/models/category.model';
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { User } from 'src/users/models/user.model';
+import { LikesService } from 'src/likes/likes.service';
 
 @Injectable()
 export class ArticlesService {
-  constructor(@InjectModel(Article) private articleModel: typeof Article) {}
+  constructor(
+    @InjectModel(Article) private articleModel: typeof Article,
+    private likesService: LikesService,
+  ) {}
 
   // Faqat published maqolalar — oddiy userlar uchun
   findAll(categorySlug?: string) {
@@ -33,7 +37,7 @@ export class ArticlesService {
     });
   }
 
-  async findBySlug(slug: string, userPlan: string = 'free') {
+  async findBySlug(slug: string, userId?: number) {
     const article = await this.articleModel.findOne({
       where: { slug, status: ArticleStatus.PUBLISHED },
       include: [
@@ -44,14 +48,18 @@ export class ArticlesService {
 
     if (!article) throw new NotFoundException('Maqola topilmadi');
 
-    if (article.type === ArticleType.PREMIUM && userPlan !== 'premium') {
-      const { content, ...rest } = article.toJSON();
-      return { ...rest, content: null, locked: true };
-    }
-
     article.increment('viewCount');
 
-    return article;
+    // Login bo'lsa isLiked tekshiramiz
+    let isLiked = false;
+    if (userId) {
+      isLiked = await this.likesService.isLiked(userId, article.id);
+    }
+
+    return {
+      ...article.toJSON(),
+      isLiked,
+    };
   }
 
   // Admin: draft maqolalar ham ko'rinadi

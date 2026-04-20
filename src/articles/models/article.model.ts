@@ -62,6 +62,9 @@ export class Article extends Model {
   @Column({ type: DataType.INTEGER, allowNull: false })
   categoryId: number;
 
+  @Column({ type: DataType.INTEGER, defaultValue: 0 })
+  likeCount: number;
+
   @BelongsTo(() => Category)
   category: Category;
 

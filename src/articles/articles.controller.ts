@@ -11,12 +11,13 @@ import {
   UseGuards,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiOperation, ApiTags } from '@nestjs/swagger';
-import { Roles } from '../auth/decorators/roles.decorator';
+import { OptionalJwtGuard } from 'src/auth/guards/optional-jwt.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RolesGuard } from '../auth/guards/roles.guard';
-import { ArticlesService } from './articles.service';
 import { CreateArticleDto } from './dto/create-article.dto';
 import { UpdateArticleDto } from './dto/update-article.dto';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { RolesGuard } from '../auth/guards/roles.guard';
+import { ArticlesService } from './articles.service';
 
 @ApiTags('Articles')
 @Controller('articles')
@@ -32,10 +33,11 @@ export class ArticlesController {
 
   // Token bo'lsa plan tekshiriladi, bo'lmasa 'free' hisoblanadi
   @ApiOperation({ summary: 'Get article by slug' })
+  @UseGuards(OptionalJwtGuard)
   @Get('byslug/:slug')
-  findOne(@Param('slug') slug: string, @Request() req) {
-    const userPlan = req.user?.plan ?? 'free';
-    return this.articlesService.findBySlug(slug, userPlan);
+  findOne(@Param('slug') slug: string, @Request() req: any) {
+    const userId = req.user?.userId;
+    return this.articlesService.findBySlug(slug, userId);
   }
 
   // Admin routelar

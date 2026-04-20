@@ -1,15 +1,19 @@
-import { Module } from '@nestjs/common';
-import { ConfigModule, ConfigService } from '@nestjs/config';
-import { SequelizeModule } from '@nestjs/sequelize';
-import { AuthModule } from './auth/auth.module';
-import { UsersModule } from './users/users.module';
-import { CategoriesModule } from './categories/categories.module';
-import { ArticlesModule } from './articles/articles.module';
 import { SubscriptionModule } from './subscription/subscription.module';
-import { AiModule } from './ai/ai.module';
+import { CategoriesModule } from './categories/categories.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
+import { Category } from './categories/models/category.model';
+import { ConfigModule, ConfigService } from '@nestjs/config';
+import { ArticlesModule } from './articles/articles.module';
+import { Article } from './articles/models/article.model';
 import { PaymentModule } from './payment/payment.module';
+import { SequelizeModule } from '@nestjs/sequelize';
+import { UsersModule } from './users/users.module';
+import { LikesModule } from './likes/likes.module';
 import { User } from './users/models/user.model';
+import { Like } from './likes/models/like.model';
+import { AuthModule } from './auth/auth.module';
+import { AiModule } from './ai/ai.module';
+import { Module } from '@nestjs/common';
 
 @Module({
   imports: [
@@ -22,6 +26,7 @@ import { User } from './users/models/user.model';
       password: String(process.env.POSTGRES_PASSWORD),
       database: process.env.POSTGRES_DB,
       autoLoadModels: true,
+      synchronize: true,
       logging: false,
       dialectOptions: {
         ssl: {
@@ -29,7 +34,7 @@ import { User } from './users/models/user.model';
           rejectUnauthorized: false,
         },
       },
-      models: [User],
+      models: [User, Category, Article, Like],
     }),
 
     AuthModule,
@@ -40,6 +45,7 @@ import { User } from './users/models/user.model';
     AiModule,
     CloudinaryModule,
     PaymentModule,
+    LikesModule,
   ],
   controllers: [],
   providers: [],
