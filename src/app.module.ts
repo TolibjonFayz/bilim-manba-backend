@@ -1,3 +1,5 @@
+import { ArticleViewsModule } from './article-views/article-views.module';
+import { ArticleView } from './article-views/models/article-view.model';
 import { SubscriptionModule } from './subscription/subscription.module';
 import { CategoriesModule } from './categories/categories.module';
 import { CloudinaryModule } from './cloudinary/cloudinary.module';
@@ -34,7 +36,7 @@ import { Module } from '@nestjs/common';
           rejectUnauthorized: false,
         },
       },
-      models: [User, Category, Article, Like],
+      models: [User, Category, Article, Like, ArticleView],
     }),
 
     AuthModule,
@@ -46,6 +48,7 @@ import { Module } from '@nestjs/common';
     CloudinaryModule,
     PaymentModule,
     LikesModule,
+    ArticleViewsModule,
   ],
   controllers: [],
   providers: [],

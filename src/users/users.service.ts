@@ -4,13 +4,23 @@ import {
   BadRequestException,
 } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
+import { ArticleView } from 'src/article-views/models/article-view.model';
 import { UpdateUserDto, UpdatePasswordDto } from './dto/update-user.dto';
+import { Article } from 'src/articles/models/article.model';
+import { Like } from 'src/likes/models/like.model';
 import { User } from './models/user.model';
 import * as bcrypt from 'bcryptjs';
+import { Op } from 'sequelize';
+import { Category } from 'src/categories/models/category.model';
 
 @Injectable()
 export class UsersService {
-  constructor(@InjectModel(User) private userModel: typeof User) {}
+  constructor(
+    @InjectModel(User) private userModel: typeof User,
+    @InjectModel(ArticleView) private articleViewModel: typeof ArticleView,
+    @InjectModel(Like) private likeModel: typeof Like,
+    @InjectModel(Article) private articleModel: typeof Article,
+  ) {}
 
   //Create user
   async create(data: Partial<User>) {
@@ -62,5 +72,75 @@ export class UsersService {
     const hashed = await bcrypt.hash(dto.newPassword, 10);
     await user.update({ password: hashed });
     return { message: "Parol muvaffaqiyatli o'zgartirildi" };
+  }
+
+  // User statistikasi
+  async getStats(userId: number) {
+    const [readCount, savedCount] = await Promise.all([
+      // O'qilgan unique maqolalar soni
+      this.articleViewModel.count({
+        where: { userId },
+        distinct: true,
+        col: 'articleId',
+      }),
+      // Like qilgan maqolalar soni
+      this.likeModel.count({ where: { userId } }),
+    ]);
+
+    // O'rtacha o'qish vaqti — taxminan 5 daqiqa/maqola
+    const totalTime = +((readCount * 5) / 60).toFixed(1);
+
+    return { readCount, savedCount, totalTime };
+  }
+
+  // So'nggi o'qilgan maqolalar
+  async getRecentReads(userId: number, limit = 12) {
+    // 1. Views bormi tekshiramiz
+    const views = await this.articleViewModel.findAll({
+      where: { userId },
+      order: [['createdAt', 'DESC']],
+      limit: 12,
+      include: { all: true },
+    });
+
+    if (!views.length) return [];
+
+    return views;
+  }
+
+  // Haftalik faollik — oxirgi 7 kun
+  async getWeeklyActivity(userId: number) {
+    const days = ['Ya', 'Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh'];
+    const today = new Date();
+    const sevenDaysAgo = new Date(today);
+    sevenDaysAgo.setDate(today.getDate() - 6);
+    sevenDaysAgo.setHours(0, 0, 0, 0);
+
+    const views = await this.articleViewModel.findAll({
+      where: {
+        userId,
+        createdAt: { [Op.gte]: sevenDaysAgo },
+      },
+      attributes: ['createdAt'],
+    });
+
+    // Har kun uchun son
+    const result = Array.from({ length: 7 }, (_, i) => {
+      const date = new Date(sevenDaysAgo);
+      date.setDate(sevenDaysAgo.getDate() + i);
+      const dayViews = views.filter((v) => {
+        const vDate = new Date(v.createdAt);
+        return vDate.toDateString() === date.toDateString();
+      });
+      return {
+        label: days[date.getDay()],
+        value: dayViews.length,
+        date: date.toISOString().split('T')[0],
+      };
+    });
+
+    const totalThisWeek = result.reduce((sum, d) => sum + d.value, 0);
+
+    return { days: result, totalThisWeek };
   }
 }

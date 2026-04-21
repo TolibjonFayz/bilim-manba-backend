@@ -70,7 +70,6 @@ export class LikesService {
       order: [['createdAt', 'DESC']],
     });
 
-    // Faqat maqolalarni qaytaramiz
-    return likes.map((l) => l.article);
+    return likes;
   }
 }

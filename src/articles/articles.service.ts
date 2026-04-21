@@ -6,11 +6,13 @@ import { Category } from 'src/categories/models/category.model';
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { User } from 'src/users/models/user.model';
 import { LikesService } from 'src/likes/likes.service';
+import { ArticleView } from 'src/article-views/models/article-view.model';
 
 @Injectable()
 export class ArticlesService {
   constructor(
     @InjectModel(Article) private articleModel: typeof Article,
+    @InjectModel(ArticleView) private articleViewModel: typeof ArticleView,
     private likesService: LikesService,
   ) {}
 
@@ -37,9 +39,10 @@ export class ArticlesService {
     });
   }
 
+  // Maqola slug bo'yicha qidirish
   async findBySlug(slug: string, userId?: number) {
     const article = await this.articleModel.findOne({
-      where: { slug, status: ArticleStatus.PUBLISHED },
+      where: { slug },
       include: [
         { model: Category, attributes: ['id', 'name', 'slug'] },
         { model: User, attributes: ['id', 'fullName'] },
@@ -50,16 +53,21 @@ export class ArticlesService {
 
     article.increment('viewCount');
 
-    // Login bo'lsa isLiked tekshiramiz
+    if (userId) {
+      await this.articleViewModel
+        .create({
+          userId,
+          articleId: article.id,
+        } as any)
+        .catch(() => {});
+    }
+
     let isLiked = false;
     if (userId) {
       isLiked = await this.likesService.isLiked(userId, article.id);
     }
 
-    return {
-      ...article.toJSON(),
-      isLiked,
-    };
+    return { ...article.toJSON(), isLiked };
   }
 
   // Admin: draft maqolalar ham ko'rinadi
