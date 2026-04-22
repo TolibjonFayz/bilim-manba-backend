@@ -1,66 +1,41 @@
-import { Injectable, ForbiddenException } from '@nestjs/common';
 import { ExplainDto } from './dto/explain.dto.ts';
 import { ConfigService } from '@nestjs/config';
-import Anthropic from '@anthropic-ai/sdk';
+import { Injectable } from '@nestjs/common';
+import Groq from 'groq-sdk';
 
 @Injectable()
 export class AiService {
-  private client: Anthropic;
+  private groq: Groq;
 
   constructor(private config: ConfigService) {
-    this.client = new Anthropic({
-      apiKey: this.config.get<string>('ANTHROPIC_API_KEY'),
+    this.groq = new Groq({
+      apiKey: this.config.get<string>('GROQ_API_KEY'),
     });
   }
 
-  async explain(dto: ExplainDto, userPlan: string) {
-    // Bu premium feature — free user ishlatsa blokladik
-    if (userPlan !== 'premium') {
-      throw new ForbiddenException(
-        'Bu funksiya faqat premium foydalanuvchilar uchun',
-      );
-    }
-
-    const message = await this.client.messages.create({
-      model: 'claude-haiku-4-5-20251001', // Tez va arzon — bizga shu yetadi
-      max_tokens: 1024,
+  async explain(text: string, question: string, history: any[] = []) {
+    const completion = await this.groq.chat.completions.create({
+      model: 'llama-3.3-70b-versatile',
       messages: [
         {
+          role: 'system',
+          content: `Sen o'zbek tilida javob beradigan aqlli yordamchisan. 
+Foydalanuvchi maqola matni va savol bilan keladi. 
+Savolga qisqa, tushunarli va o'zbek tilida javob ber.
+Maqola matni: ${text}`,
+        },
+        ...history, // 👈 tarix
+        {
           role: 'user',
-          content: `
-Sen "Bilim Manba" platformasining AI yordamchisisisan.
-Foydalanuvchi quyidagi matnni o'zbek tilida tushuntirishingni so'rayapti.
-
-Matn:
-"""
-${dto.text}
-"""
-
-Foydalanuvchi savoli: ${dto.question}
-
-Qoidalar:
-- Faqat o'zbek tilida (lotin) javob ber
-- Oddiy va tushunarli tilda tushuntir
-- Kerak bo'lsa misollar keltir
-- Javob 3-5 paragrafdan oshmasin
-          `.trim(),
+          content: question,
         },
       ],
+      temperature: 0.7,
+      max_tokens: 500,
     });
 
-    // Anthropic response ichidan faqat text olamiz
-    const content = message.content[0];
-    if (content.type !== 'text') {
-      throw new Error('Kutilmagan javob formati');
-    }
-
     return {
-      explanation: content.text,
-      // Token statistikasi — monitoring uchun
-      usage: {
-        inputTokens: message.usage.input_tokens,
-        outputTokens: message.usage.output_tokens,
-      },
+      explanation: completion.choices[0]?.message?.content ?? 'Javob olinmadi',
     };
   }
 }

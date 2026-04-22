@@ -12,7 +12,7 @@ export class AiController {
   constructor(private aiService: AiService) {}
 
   @Post('explain')
-  explain(@Body() dto: ExplainDto, @Request() req) {
-    return this.aiService.explain(dto, req.user.plan);
+  explain(@Body() body: { text: string; question: string; history?: any[] }) {
+    return this.aiService.explain(body.text, body.question, body.history ?? []);
   }
 }

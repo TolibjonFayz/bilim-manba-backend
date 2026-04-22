@@ -110,37 +110,49 @@ export class UsersService {
 
   // Haftalik faollik — oxirgi 7 kun
   async getWeeklyActivity(userId: number) {
-    const days = ['Ya', 'Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh'];
-    const today = new Date();
-    const sevenDaysAgo = new Date(today);
-    sevenDaysAgo.setDate(today.getDate() - 6);
-    sevenDaysAgo.setHours(0, 0, 0, 0);
+    const weekDays = ['Du', 'Se', 'Ch', 'Pa', 'Ju', 'Sh', 'Ya'];
+
+    // Tashkent UTC+5 ni hisobga olamiz
+    const now = new Date();
+    const tashkentOffset = 5 * 60 * 60 * 1000; // +5 soat
+    const today = new Date(now.getTime() + tashkentOffset);
+
+    // Dushanbani topamiz
+    const dayOfWeek = today.getUTCDay(); // 0=Ya, 1=Du...
+    const daysFromMonday = dayOfWeek === 0 ? 6 : dayOfWeek - 1;
+    const monday = new Date(today);
+    monday.setUTCDate(today.getUTCDate() - daysFromMonday);
+    monday.setUTCHours(0, 0, 0, 0);
 
     const views = await this.articleViewModel.findAll({
       where: {
         userId,
-        createdAt: { [Op.gte]: sevenDaysAgo },
+        createdAt: { [Op.gte]: new Date(monday.getTime() - tashkentOffset) },
       },
       attributes: ['createdAt'],
     });
 
-    // Har kun uchun son
     const result = Array.from({ length: 7 }, (_, i) => {
-      const date = new Date(sevenDaysAgo);
-      date.setDate(sevenDaysAgo.getDate() + i);
+      const date = new Date(monday);
+      date.setUTCDate(monday.getUTCDate() + i);
+
+      const dateStr = date.toISOString().split('T')[0]; // "2026-04-20"
+
       const dayViews = views.filter((v) => {
-        const vDate = new Date(v.createdAt);
-        return vDate.toDateString() === date.toDateString();
+        const vDate = new Date(
+          new Date(v.createdAt).getTime() + tashkentOffset,
+        );
+        return vDate.toISOString().split('T')[0] === dateStr;
       });
+
       return {
-        label: days[date.getDay()],
+        label: weekDays[i],
         value: dayViews.length,
-        date: date.toISOString().split('T')[0],
+        date: dateStr,
       };
     });
 
     const totalThisWeek = result.reduce((sum, d) => sum + d.value, 0);
-
     return { days: result, totalThisWeek };
   }
 }
