@@ -11,11 +11,13 @@ import { PaymentModule } from './payment/payment.module';
 import { SequelizeModule } from '@nestjs/sequelize';
 import { UsersModule } from './users/users.module';
 import { LikesModule } from './likes/likes.module';
+import { AdminModule } from './admin/admin.module';
 import { User } from './users/models/user.model';
 import { Like } from './likes/models/like.model';
 import { AuthModule } from './auth/auth.module';
 import { AiModule } from './ai/ai.module';
 import { Module } from '@nestjs/common';
+import { CloudflareModule } from './cloudflare/cloudflare.module';
 
 @Module({
   imports: [
@@ -49,6 +51,8 @@ import { Module } from '@nestjs/common';
     PaymentModule,
     LikesModule,
     ArticleViewsModule,
+    AdminModule,
+    CloudflareModule,
   ],
   controllers: [],
   providers: [],

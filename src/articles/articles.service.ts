@@ -20,7 +20,6 @@ export class ArticlesService {
   findAll(categorySlug?: string) {
     return this.articleModel.findAll({
       where: { status: ArticleStatus.PUBLISHED },
-      // Content'ni list'da bermаymiz — trafik tejash uchun
       attributes: { exclude: ['content'] },
       include: [
         {
@@ -31,7 +30,6 @@ export class ArticlesService {
         },
         {
           model: User,
-          // Parolni hech qachon frontendga bermaymiz!
           attributes: ['id', 'fullName'],
         },
       ],
