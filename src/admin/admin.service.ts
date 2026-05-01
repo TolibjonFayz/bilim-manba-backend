@@ -7,6 +7,8 @@ import { Category } from '../categories/models/category.model';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { CloudflareService } from 'src/cloudflare/cloudflare.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
+import { SubscribersService } from 'src/subscribers/subscribers.service';
+import { MailerService } from 'src/mailer/mailer.service';
 
 @Injectable()
 export class AdminService {
@@ -18,6 +20,8 @@ export class AdminService {
     @InjectModel(Like) private likeModel: typeof Like,
     private cloudflareService: CloudflareService,
     private cloudinaryService: CloudinaryService,
+    private subscribersService: SubscribersService,
+    private mailerService: MailerService,
   ) {}
 
   // Dashboard statistika
@@ -53,7 +57,14 @@ export class AdminService {
 
   // Maqola qo'shish
   async createArticle(dto: any) {
-    return this.articleModel.create(dto);
+    const article = await this.articleModel.create(dto);
+
+    // Published bo'lsa — hammaga email yuborish
+    if (dto.status === 'published') {
+      await this.sendNewsletterToAll(article);
+    }
+
+    return article;
   }
 
   // Maqola yangilash
@@ -117,5 +128,27 @@ export class AdminService {
         { model: User, attributes: ['id', 'fullName'] },
       ],
     });
+  }
+
+  // Yangi metod qo'sh:
+  private async sendNewsletterToAll(article: any) {
+    try {
+      const subscribers = await this.subscribersService.getAllActive();
+
+      // Har bir subscriberga alohida email
+      const emailPromises = subscribers.map((sub) =>
+        this.mailerService.sendNewArticleEmail(
+          sub.email,
+          article.title,
+          article.slug,
+          article.excerpt,
+          article.coverImage,
+        ),
+      );
+
+      await Promise.allSettled(emailPromises);
+    } catch (error) {
+      console.error('Newsletter yuborishda xato:', error);
+    }
   }
 }

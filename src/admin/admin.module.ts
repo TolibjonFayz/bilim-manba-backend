@@ -11,6 +11,8 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { AdminService } from './admin.service';
 import { AdminController } from './admin.controller';
 import { ArticleView } from 'src/article-views/models/article-view.model';
+import { SubscribersModule } from 'src/subscribers/subscribers.module';
+import { MailerModule } from 'src/mailer/mailer.module';
 
 @Module({
   imports: [
@@ -18,6 +20,8 @@ import { ArticleView } from 'src/article-views/models/article-view.model';
     CloudflareModule,
     CloudinaryModule,
     MulterModule.register({ storage: memoryStorage() }),
+    SubscribersModule,
+    MailerModule,
   ],
   providers: [AdminService],
   controllers: [AdminController],
