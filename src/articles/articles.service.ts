@@ -1,12 +1,13 @@
+import { Article, ArticleStatus, ArticleType } from './models/article.model';
+import { ArticleView } from 'src/article-views/models/article-view.model';
+import { Category } from 'src/categories/models/category.model';
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { InjectModel } from '@nestjs/sequelize';
 import { CreateArticleDto } from './dto/create-article.dto';
 import { UpdateArticleDto } from './dto/update-article.dto';
-import { Category } from 'src/categories/models/category.model';
-import { Article, ArticleStatus, ArticleType } from './models/article.model';
-import { User } from 'src/users/models/user.model';
 import { LikesService } from 'src/likes/likes.service';
-import { ArticleView } from 'src/article-views/models/article-view.model';
+import { User } from 'src/users/models/user.model';
+import { InjectModel } from '@nestjs/sequelize';
+import { Op } from 'sequelize';
 
 @Injectable()
 export class ArticlesService {
@@ -94,5 +95,31 @@ export class ArticlesService {
     if (!article) throw new NotFoundException('Maqola topilmadi');
     await article.destroy();
     return { message: "Maqola o'chirildi" };
+  }
+
+  async search(query: string) {
+    if (!query || query.trim().length < 2) {
+      return [];
+    }
+
+    const q = `%${query.trim()}%`;
+
+    return this.articleModel.findAll({
+      where: {
+        status: ArticleStatus.PUBLISHED,
+        [Op.or]: [
+          { title: { [Op.iLike]: q } },
+          { excerpt: { [Op.iLike]: q } },
+          { tags: { [Op.iLike]: q } },
+        ],
+      },
+      attributes: { exclude: ['content'] },
+      include: [
+        { model: Category, attributes: ['id', 'name', 'slug', 'icon'] },
+        { model: User, attributes: ['id', 'fullName'] },
+      ],
+      order: [['viewCount', 'DESC']],
+      limit: 20,
+    });
   }
 }

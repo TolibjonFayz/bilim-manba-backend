@@ -79,4 +79,11 @@ export class ArticlesController {
   remove(@Param('id') id: string) {
     return this.articlesService.remove(+id);
   }
+
+  // findAll dan keyin qo'sh
+  @ApiOperation({ summary: 'Search articles' })
+  @Get('search')
+  search(@Query('q') q: string) {
+    return this.articlesService.search(q);
+  }
 }
