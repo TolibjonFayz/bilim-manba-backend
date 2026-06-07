@@ -20,6 +20,7 @@ import { Like } from './likes/models/like.model';
 import { AuthModule } from './auth/auth.module';
 import { AiModule } from './ai/ai.module';
 import { Module } from '@nestjs/common';
+import { BookmarksModule } from './bookmarks/bookmarks.module';
 
 @Module({
   imports: [
@@ -57,6 +58,7 @@ import { Module } from '@nestjs/common';
     CloudflareModule,
     SubscribersModule,
     MailerModule,
+    BookmarksModule,
   ],
   controllers: [],
   providers: [],

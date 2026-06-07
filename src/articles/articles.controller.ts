@@ -86,4 +86,10 @@ export class ArticlesController {
   search(@Query('q') q: string) {
     return this.articlesService.search(q);
   }
+
+  @Post('view/:slug')
+  recordView(@Param('slug') slug: string, @Request() req: any) {
+    const userId = req.user?.userId;
+    return this.articlesService.recordView(slug, userId);
+  }
 }

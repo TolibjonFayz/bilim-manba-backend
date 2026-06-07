@@ -1,9 +1,10 @@
 import { Module } from '@nestjs/common';
-import { SequelizeModule } from '@nestjs/sequelize';
-import { ArticlesController } from './articles.controller';
-import { ArticlesService } from './articles.service';
 import { Article } from './models/article.model';
+import { SequelizeModule } from '@nestjs/sequelize';
+import { ArticlesService } from './articles.service';
 import { LikesModule } from 'src/likes/likes.module';
+import { ArticlesController } from './articles.controller';
+import { BookmarksModule } from 'src/bookmarks/bookmarks.module';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { ArticleViewsModule } from 'src/article-views/article-views.module';
 
@@ -12,6 +13,7 @@ import { ArticleViewsModule } from 'src/article-views/article-views.module';
     SequelizeModule.forFeature([Article, ArticleView]),
     LikesModule,
     ArticleViewsModule,
+    BookmarksModule,
   ],
   providers: [ArticlesService],
   controllers: [ArticlesController],

@@ -1,5 +1,6 @@
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { ArticleView } from 'src/article-views/models/article-view.model';
+import { BookmarksService } from 'src/bookmarks/bookmarks.service';
 import { Category } from 'src/categories/models/category.model';
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { CreateArticleDto } from './dto/create-article.dto';
@@ -15,6 +16,7 @@ export class ArticlesService {
     @InjectModel(Article) private articleModel: typeof Article,
     @InjectModel(ArticleView) private articleViewModel: typeof ArticleView,
     private likesService: LikesService,
+    private bookmarksService: BookmarksService,
   ) {}
 
   // Faqat published maqolalar — oddiy userlar uchun
@@ -50,23 +52,35 @@ export class ArticlesService {
 
     if (!article) throw new NotFoundException('Maqola topilmadi');
 
-    article.increment('viewCount');
-
-    if (userId) {
-      await this.articleViewModel
-        .create({
-          userId,
-          articleId: article.id,
-        } as any)
-        .catch(() => {});
-    }
-
     let isLiked = false;
     if (userId) {
       isLiked = await this.likesService.isLiked(userId, article.id);
     }
 
-    return { ...article.toJSON(), isLiked };
+    let isBookmarked = false;
+    if (userId) {
+      isBookmarked = await this.bookmarksService.isBookmarked(
+        userId,
+        article.id,
+      );
+    }
+
+    return { ...article.toJSON(), isLiked, isBookmarked };
+  }
+
+  async recordView(slug: string, userId?: number) {
+    const article = await this.articleModel.findOne({ where: { slug } });
+    if (!article) return { success: false };
+
+    await article.increment('viewCount');
+
+    if (userId) {
+      await this.articleViewModel
+        .create({ userId, articleId: article.id } as any)
+        .catch(() => {});
+    }
+
+    return { success: true };
   }
 
   // Admin: draft maqolalar ham ko'rinadi

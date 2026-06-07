@@ -12,6 +12,7 @@ import { User } from './models/user.model';
 import * as bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
 import { Category } from 'src/categories/models/category.model';
+import { Bookmark } from 'src/bookmarks/models/bookmark.model';
 
 @Injectable()
 export class UsersService {
@@ -20,6 +21,7 @@ export class UsersService {
     @InjectModel(ArticleView) private articleViewModel: typeof ArticleView,
     @InjectModel(Like) private likeModel: typeof Like,
     @InjectModel(Article) private articleModel: typeof Article,
+    @InjectModel(Bookmark) private bookmarkModel: typeof Bookmark,
   ) {}
 
   //Create user
@@ -76,21 +78,19 @@ export class UsersService {
 
   // User statistikasi
   async getStats(userId: number) {
-    const [readCount, savedCount] = await Promise.all([
-      // O'qilgan unique maqolalar soni
+    const [readCount, savedCount, bookmarkCount] = await Promise.all([
       this.articleViewModel.count({
         where: { userId },
         distinct: true,
         col: 'articleId',
       }),
-      // Like qilgan maqolalar soni
       this.likeModel.count({ where: { userId } }),
+      this.bookmarkModel.count({ where: { userId } }),
     ]);
 
-    // O'rtacha o'qish vaqti — taxminan 5 daqiqa/maqola
     const totalTime = +((readCount * 5) / 60).toFixed(1);
 
-    return { readCount, savedCount, totalTime };
+    return { readCount, savedCount, bookmarkCount, totalTime };
   }
 
   // So'nggi o'qilgan maqolalar
