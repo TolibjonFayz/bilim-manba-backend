@@ -21,6 +21,7 @@ import { AuthModule } from './auth/auth.module';
 import { AiModule } from './ai/ai.module';
 import { Module } from '@nestjs/common';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
+import { CommentsModule } from './comments/comments.module';
 
 @Module({
   imports: [
@@ -59,6 +60,7 @@ import { BookmarksModule } from './bookmarks/bookmarks.module';
     SubscribersModule,
     MailerModule,
     BookmarksModule,
+    CommentsModule,
   ],
   controllers: [],
   providers: [],
