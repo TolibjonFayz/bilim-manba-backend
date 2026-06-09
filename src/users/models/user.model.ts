@@ -36,6 +36,9 @@ export class User extends Model {
   @Column({ type: DataType.DATE, allowNull: true })
   premiumExpiresAt: Date | null;
 
+  @Column({ type: DataType.BOOLEAN, defaultValue: false })
+  isPublic: boolean;
+
   @Column({ type: DataType.BOOLEAN, defaultValue: true })
   isActive: boolean;
 }

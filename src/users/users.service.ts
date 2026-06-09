@@ -45,10 +45,42 @@ export class UsersService {
         'plan',
         'premiumExpiresAt',
         'createdAt',
+        'isPublic',
       ],
     });
     if (!user) throw new NotFoundException('User topilmadi');
     return user;
+  }
+
+  async getPublicProfile(id: number) {
+    const user = await this.userModel.findByPk(id, {
+      attributes: ['id', 'fullName', 'isPublic', 'createdAt'],
+    });
+
+    if (!user) throw new NotFoundException('Foydalanuvchi topilmadi');
+
+    // Private bo'lsa — ma'lumot bermaймиз
+    if (!user.dataValues.isPublic) {
+      return { isPublic: false, fullName: user.dataValues.fullName };
+    }
+
+    // Public — statistika ham qo'shamiz
+    const [readCount, savedCount] = await Promise.all([
+      this.articleViewModel.count({
+        where: { userId: id },
+        distinct: true,
+        col: 'articleId',
+      }),
+      this.likeModel.count({ where: { userId: id } }),
+    ]);
+
+    return {
+      isPublic: true,
+      id: user.dataValues.id,
+      fullName: user.dataValues.fullName,
+      createdAt: user.dataValues.createdAt,
+      stats: { readCount, savedCount },
+    };
   }
 
   // Profilni yangilash
