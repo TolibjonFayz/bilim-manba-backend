@@ -22,56 +22,48 @@ export enum ArticleType {
 @Table({ tableName: 'articles', timestamps: true })
 export class Article extends Model {
   @Column({ type: DataType.STRING, allowNull: false })
-  title: string;
+  declare title: string;
 
-  // SEO uchun unique URL: /articles/javascript-nima
   @Column({ type: DataType.STRING, unique: true, allowNull: false })
-  slug: string;
+  declare slug: string;
 
-  // Kartada ko'rinadigan qisqa tavsif
   @Column({ type: DataType.TEXT, allowNull: true })
-  excerpt: string;
+  declare excerpt: string;
 
-  // Asosiy kontent — Markdown formatida saqlanadi
-  @Column({ type: DataType.TEXT, allowNull: false })
-  content: string;
+  @Column({ type: DataType.TEXT, allowNull: true })
+  declare content: string;
 
-  // Cloudinary URL — keyinroq qo'shamiz
   @Column({ type: DataType.STRING, allowNull: true })
-  coverImage: string;
+  declare coverImage: string;
+
+  @Column({ type: DataType.ENUM(...Object.values(ArticleType)) })
+  declare type: ArticleType;
 
   @Column({
-    type: DataType.STRING,
+    type: DataType.ENUM(...Object.values(ArticleStatus)),
+    defaultValue: ArticleStatus.DRAFT,
   })
-  type: ArticleType;
+  declare status: ArticleStatus;
 
-  @Column({
-    type: DataType.STRING,
-  })
-  status: ArticleStatus;
-
-  // Statistika uchun
   @Column({ type: DataType.INTEGER, defaultValue: 0 })
-  viewCount: number;
+  declare viewCount: number;
 
-  // Meilisearch tag'lari: ["javascript", "frontend"]
-  @Column({ type: DataType.STRING })
-  tags: string;
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare tags: string;
 
   @ForeignKey(() => Category)
-  @Column({ type: DataType.INTEGER, allowNull: false })
-  categoryId: number;
+  @Column({ type: DataType.INTEGER })
+  declare categoryId: number;
 
   @Column({ type: DataType.INTEGER, defaultValue: 0 })
-  likeCount: number;
+  declare likeCount: number;
+
+  @ForeignKey(() => User)
+  @Column({ type: DataType.INTEGER })
+  declare authorId: number;
 
   @BelongsTo(() => Category)
   category: Category;
-
-  // Kim yozdi
-  @ForeignKey(() => User)
-  @Column({ type: DataType.INTEGER, allowNull: false })
-  authorId: number;
 
   @BelongsTo(() => User)
   author: User;

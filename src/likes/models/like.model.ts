@@ -17,14 +17,14 @@ import { User } from 'src/users/models/user.model';
 export class Like extends Model {
   @ForeignKey(() => User)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  userId: number;
+  declare userId: number;
 
   @BelongsTo(() => User)
   user: User;
 
   @ForeignKey(() => Article)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  articleId: number;
+  declare articleId: number;
 
   @BelongsTo(() => Article)
   article: Article;

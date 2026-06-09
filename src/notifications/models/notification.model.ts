@@ -12,21 +12,20 @@ import { User } from 'src/users/models/user.model';
 export class Notification extends Model {
   @ForeignKey(() => User)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  userId: number;
+  declare userId: number;
 
   @BelongsTo(() => User)
   user: User;
 
   @Column({ type: DataType.STRING, allowNull: false })
-  title: string;
+  declare title: string;
 
   @Column({ type: DataType.TEXT, allowNull: true })
-  message: string;
+  declare message: string;
 
-  // Bosilganda qayerga olib boradi: /articles/slug
   @Column({ type: DataType.STRING, allowNull: true })
-  link: string;
+  declare link: string;
 
   @Column({ type: DataType.BOOLEAN, defaultValue: false })
-  isRead: boolean;
+  declare isRead: boolean;
 }

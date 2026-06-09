@@ -13,32 +13,38 @@ export enum SubscriptionPlan {
 @Table({ tableName: 'users', timestamps: true })
 export class User extends Model {
   @Column({ type: DataType.STRING, allowNull: false })
-  fullName: string;
+  declare fullName: string;
 
   @Column({ type: DataType.STRING, unique: true, allowNull: false })
-  email: string;
+  declare email: string;
 
   @Column({ type: DataType.STRING, allowNull: false })
-  password: string;
+  declare password: string;
 
   @Column({
     type: DataType.ENUM(...Object.values(UserRole)),
     defaultValue: UserRole.USER,
   })
-  role: UserRole;
+  declare role: UserRole;
 
   @Column({
     type: DataType.ENUM(...Object.values(SubscriptionPlan)),
     defaultValue: SubscriptionPlan.FREE,
   })
-  plan: SubscriptionPlan;
+  declare plan: SubscriptionPlan;
 
   @Column({ type: DataType.DATE, allowNull: true })
-  premiumExpiresAt: Date | null;
-
-  @Column({ type: DataType.BOOLEAN, defaultValue: false })
-  isPublic: boolean;
+  declare premiumExpiresAt: Date | null;
 
   @Column({ type: DataType.BOOLEAN, defaultValue: true })
-  isActive: boolean;
+  declare isActive: boolean;
+
+  @Column({ type: DataType.BOOLEAN, defaultValue: false })
+  declare isPublic: boolean;
+
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare resetToken: string;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare resetTokenExpires: Date;
 }
