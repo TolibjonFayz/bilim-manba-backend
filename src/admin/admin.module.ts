@@ -1,18 +1,19 @@
+import { memoryStorage } from 'multer';
 import { Module } from '@nestjs/common';
-import { SequelizeModule } from '@nestjs/sequelize';
-import { MulterModule } from '@nestjs/platform-express';
-import { memoryStorage } from 'multer'; // 👈 qo'shildi
+import { AdminService } from './admin.service';
+import { Like } from '../likes/models/like.model';
 import { User } from '../users/models/user.model';
+import { SequelizeModule } from '@nestjs/sequelize';
+import { AdminController } from './admin.controller';
+import { MailerModule } from 'src/mailer/mailer.module';
+import { MulterModule } from '@nestjs/platform-express';
 import { Article } from '../articles/models/article.model';
 import { Category } from '../categories/models/category.model';
-import { Like } from '../likes/models/like.model';
 import { CloudflareModule } from '../cloudflare/cloudflare.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
-import { AdminService } from './admin.service';
-import { AdminController } from './admin.controller';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { SubscribersModule } from 'src/subscribers/subscribers.module';
-import { MailerModule } from 'src/mailer/mailer.module';
+import { NotificationsModule } from 'src/notifications/notifications.module';
 
 @Module({
   imports: [
@@ -22,6 +23,7 @@ import { MailerModule } from 'src/mailer/mailer.module';
     MulterModule.register({ storage: memoryStorage() }),
     SubscribersModule,
     MailerModule,
+    NotificationsModule,
   ],
   providers: [AdminService],
   controllers: [AdminController],

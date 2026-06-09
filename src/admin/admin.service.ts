@@ -2,13 +2,14 @@ import { Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { User } from '../users/models/user.model';
 import { Like } from '../likes/models/like.model';
+import { MailerService } from 'src/mailer/mailer.service';
 import { Article } from '../articles/models/article.model';
 import { Category } from '../categories/models/category.model';
-import { ArticleView } from 'src/article-views/models/article-view.model';
 import { CloudflareService } from 'src/cloudflare/cloudflare.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 import { SubscribersService } from 'src/subscribers/subscribers.service';
-import { MailerService } from 'src/mailer/mailer.service';
+import { ArticleView } from 'src/article-views/models/article-view.model';
+import { NotificationsService } from 'src/notifications/notifications.service';
 
 @Injectable()
 export class AdminService {
@@ -22,6 +23,7 @@ export class AdminService {
     private cloudinaryService: CloudinaryService,
     private subscribersService: SubscribersService,
     private mailerService: MailerService,
+    private notificationsService: NotificationsService,
   ) {}
 
   // Dashboard statistika
@@ -59,9 +61,16 @@ export class AdminService {
   async createArticle(dto: any) {
     const article = await this.articleModel.create(dto);
 
-    // Published bo'lsa — hammaga email yuborish
     if (dto.status === 'published') {
+      // Email yuborish
       await this.sendNewsletterToAll(article);
+
+      // In-app bildirishnoma — barcha userlarga
+      await this.notificationsService.createForAllUsers(
+        'Yangi maqola chiqdi! 📚',
+        article.title,
+        `/articles/${article.slug}`,
+      );
     }
 
     return article;
