@@ -187,4 +187,28 @@ export class UsersService {
     const totalThisWeek = result.reduce((sum, d) => sum + d.value, 0);
     return { days: result, totalThisWeek };
   }
+
+  async updateResetToken(
+    userId: number,
+    token: string | null,
+    expires: Date | null,
+    newPassword?: string,
+  ) {
+    const updateData: any = {
+      resetToken: token,
+      resetTokenExpires: expires,
+    };
+    if (newPassword) updateData.password = newPassword;
+
+    await this.userModel.update(updateData, { where: { id: userId } });
+  }
+
+  async findByResetToken(token: string) {
+    return this.userModel.findOne({
+      where: {
+        resetToken: token,
+        resetTokenExpires: { [Op.gt]: new Date() }, // muddati o'tmagan
+      },
+    });
+  }
 }
