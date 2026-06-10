@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { User } from '../users/models/user.model';
 import { Like } from '../likes/models/like.model';
@@ -59,21 +59,31 @@ export class AdminService {
 
   // Maqola qo'shish
   async createArticle(dto: any) {
-    const article = await this.articleModel.create(dto);
+    try {
+      let slug = dto.slug;
+      const existing = await this.articleModel.findOne({ where: { slug } });
+      if (existing) {
+        slug = `${slug}-${Date.now()}`;
+      }
 
-    if (dto.status === 'published') {
-      // Email yuborish
-      await this.sendNewsletterToAll(article);
+      const article = await this.articleModel.create({ ...dto, slug });
 
-      // In-app bildirishnoma — barcha userlarga
-      await this.notificationsService.createForAllUsers(
-        'Yangi maqola chiqdi! 📚',
-        article.title,
-        `/articles/${article.slug}`,
-      );
+      if (dto.status === 'published') {
+        await this.sendNewsletterToAll(article);
+        await this.notificationsService.createForAllUsers(
+          'Yangi maqola chiqdi! 📚',
+          article.title,
+          `/articles/${article.slug}`,
+        );
+      }
+
+      return article;
+    } catch (error: any) {
+      if (error.name === 'SequelizeUniqueConstraintError') {
+        throw new BadRequestException('Bu slug allaqachon mavjud!');
+      }
+      throw error;
     }
-
-    return article;
   }
 
   // Maqola yangilash
