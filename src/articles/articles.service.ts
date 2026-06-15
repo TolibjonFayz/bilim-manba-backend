@@ -15,6 +15,7 @@ export class ArticlesService {
   constructor(
     @InjectModel(Article) private articleModel: typeof Article,
     @InjectModel(ArticleView) private articleViewModel: typeof ArticleView,
+    @InjectModel(Category) private categoryModel: typeof Category,
     private likesService: LikesService,
     private bookmarksService: BookmarksService,
   ) {}
@@ -135,5 +136,19 @@ export class ArticlesService {
       order: [['viewCount', 'DESC']],
       limit: 20,
     });
+  }
+
+  async getSitemapData() {
+    const articles = await this.articleModel.findAll({
+      where: { status: 'published' },
+      attributes: ['slug', 'updatedAt'],
+      order: [['updatedAt', 'DESC']],
+    });
+
+    const categories = await this.categoryModel.findAll({
+      attributes: ['slug', 'updatedAt'],
+    });
+
+    return { articles, categories };
   }
 }

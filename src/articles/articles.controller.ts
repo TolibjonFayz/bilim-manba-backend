@@ -92,4 +92,9 @@ export class ArticlesController {
     const userId = req.user?.userId;
     return this.articlesService.recordView(slug, userId);
   }
+
+  @Get('sitemap')
+  getSitemap() {
+    return this.articlesService.getSitemapData();
+  }
 }
