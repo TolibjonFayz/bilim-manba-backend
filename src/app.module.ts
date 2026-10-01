@@ -24,6 +24,7 @@ import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DatabaseModule } from './database/database.module';
+import { HealthModule } from './health/health.module';
 
 @Module({
   imports: [
@@ -48,6 +49,7 @@ import { DatabaseModule } from './database/database.module';
     }),
 
     DatabaseModule,
+    HealthModule,
     AuthModule,
     UsersModule,
     CategoriesModule,
