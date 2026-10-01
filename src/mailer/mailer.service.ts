@@ -57,7 +57,7 @@ export class MailerService {
     ${coverImage ? `<img src="${coverImage}" alt="${articleTitle}" class="cover" />` : ''}
     <div class="body">
       <h2>${articleTitle}</h2>
-      <p>${excerpt}</p>
+      ${excerpt ? `<p>${excerpt}</p>` : ''}
       <a href="${articleUrl}" class="btn">Maqolani o'qish →</a>
     </div>
     <div class="footer">

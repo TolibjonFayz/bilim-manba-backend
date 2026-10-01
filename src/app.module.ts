@@ -23,6 +23,7 @@ import { Module } from '@nestjs/common';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
+import { DatabaseModule } from './database/database.module';
 
 @Module({
   imports: [
@@ -46,6 +47,7 @@ import { NotificationsModule } from './notifications/notifications.module';
       models: [User, Category, Article, Like, ArticleView],
     }),
 
+    DatabaseModule,
     AuthModule,
     UsersModule,
     CategoriesModule,

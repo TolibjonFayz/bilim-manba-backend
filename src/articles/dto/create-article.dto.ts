@@ -17,10 +17,21 @@ export class CreateArticleDto {
   @IsString()
   slug: string;
 
-  @ApiProperty({ example: 'Nolan', description: 'Excerpt of the article' })
+  @ApiProperty({
+    example: "Kvant fizikasining eng g'alati g'oyasi oddiy tilda.",
+    description: 'Short summary (card, meta description)',
+  })
   @IsOptional()
   @IsString()
   excerpt?: string;
+
+  @ApiProperty({
+    example: 'Quanta Magazine (Ben Brubaker)',
+    description: 'Original source / author of the article',
+  })
+  @IsOptional()
+  @IsString()
+  source?: string;
 
   @ApiProperty({
     example: 'This is the content of the article',

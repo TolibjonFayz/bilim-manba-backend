@@ -36,8 +36,7 @@ export class AiService {
     });
     // llama-3.3-70b-versatile Groq'dan olib tashlangan — endi model env
     // orqali almashtiriladi, kod o'zgartirmasdan
-    this.model =
-      this.config.get<string>('GROQ_MODEL') ?? 'openai/gpt-oss-120b';
+    this.model = this.config.get<string>('GROQ_MODEL') ?? 'openai/gpt-oss-120b';
   }
 
   /** Mehmon limitini tekshiradi va hisoblaydi. Qolgan savollar sonini qaytaradi. */
@@ -74,6 +73,54 @@ export class AiService {
     const used = this.guestCounts.get(ip) ?? 0;
     if (used > 0) this.guestCounts.set(ip, used - 1);
     if (this.guestTotal > 0) this.guestTotal--;
+  }
+
+  /** Admin panel uchun: maqola matnidan 1-2 gaplik qisqa tavsif (excerpt) */
+  async generateExcerpt(title: string, text: string) {
+    try {
+      const completion = await this.groq.chat.completions.create({
+        model: this.model,
+        messages: [
+          {
+            role: 'system',
+            content: `Sen o'zbek tilidagi bilim platformasi muharririsan. Maqola uchun qisqa tavsif (excerpt) yozasan: u maqola kartochkasida va Google qidiruv natijasida ko'rinadi.
+Qoidalar:
+- O'zbek lotin yozuvida, tutuq belgisi uchun oddiy apostrof (') ishlat: o', g', ma'no.
+- 1-2 gap, 130-170 belgi. Hech qachon 190 belgidan oshmasin.
+- Maqolaning asosiy g'oyasini aniq ayt, o'quvchini qiziqtirsin. "Ushbu maqolada", "Bu maqola" kabi iboralar bilan boshlama.
+- Sarlavhani takrorlama. Qo'shtirnoq, emoji, markdown ishlatma.
+- Faqat tavsif matnini qaytar.`,
+          },
+          {
+            role: 'user',
+            content: `Sarlavha: ${String(title ?? '').slice(0, 300)}
+
+Matn:
+${String(text ?? '').slice(0, MAX_TEXT)}`,
+          },
+        ],
+        temperature: 0.4,
+        max_completion_tokens: 3000,
+        ...(this.model.startsWith('openai/gpt-oss')
+          ? { reasoning_effort: 'low' as const }
+          : {}),
+      });
+      // Saytdagi matnlar bilan bir xil bo'lsin: o‘ → o', “ ” → "
+      const excerpt = (completion.choices[0]?.message?.content ?? '')
+        .replace(/[‘’ʻʼ`]/g, "'")
+        .replace(/[“”«»]/g, '"')
+        .replace(/‑/g, '-')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .replace(/^"|"$/g, '');
+      if (!excerpt) throw new Error("bo'sh javob");
+      return { excerpt };
+    } catch (err: any) {
+      this.logger.error(`Excerpt xatosi (${this.model}): ${err?.message}`);
+      throw new ServiceUnavailableException(
+        "AI tavsif yoza olmadi. Qayta urinib ko'ring yoki qo'lda yozing.",
+      );
+    }
   }
 
   async explain(text: string, question: string, history: unknown[] = []) {

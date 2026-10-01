@@ -60,6 +60,7 @@ export class LikesService {
             'title',
             'slug',
             'excerpt',
+            'source',
             'coverImage',
             'type',
             'viewCount',

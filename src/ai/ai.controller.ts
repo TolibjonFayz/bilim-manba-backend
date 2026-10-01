@@ -1,5 +1,7 @@
 import { Body, Controller, Post, Request, UseGuards } from '@nestjs/common';
 import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from '../auth/guards/roles.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AiService } from './ai.service';
 
@@ -26,6 +28,13 @@ function clientIp(req: any): string {
 @Controller('ai')
 export class AiController {
   constructor(private aiService: AiService) {}
+
+  // Admin panel: maqola matnidan qisqa tavsif yozish
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Post('excerpt')
+  excerpt(@Body() body: { title: string; text: string }) {
+    return this.aiService.generateExcerpt(body.title, body.text);
+  }
 
   // Login qilganlar — cheksiz; mehmonlar — kuniga 3 ta savol (IP bo'yicha)
   @Post('explain')

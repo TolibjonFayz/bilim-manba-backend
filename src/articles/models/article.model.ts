@@ -27,8 +27,14 @@ export class Article extends Model {
   @Column({ type: DataType.STRING, unique: true, allowNull: false })
   declare slug: string;
 
+  // Qisqa tavsif: kartochka, meta description, Google natijasi
   @Column({ type: DataType.TEXT, allowNull: true })
   declare excerpt: string;
+
+  // Manba: "Quanta Magazine (Ben Brubaker)", "Claude AI" ...
+  // Ustun DataMigrationsService orqali qo'shiladi (synchronize ustun qo'shmaydi)
+  @Column({ type: DataType.STRING, allowNull: true })
+  declare source: string;
 
   @Column({ type: DataType.TEXT, allowNull: true })
   declare content: string;

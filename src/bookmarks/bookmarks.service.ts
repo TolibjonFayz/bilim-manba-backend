@@ -45,6 +45,7 @@ export class BookmarksService {
             'title',
             'slug',
             'excerpt',
+            'source',
             'coverImage',
             'viewCount',
             'likeCount',

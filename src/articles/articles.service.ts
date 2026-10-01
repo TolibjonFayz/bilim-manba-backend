@@ -125,6 +125,7 @@ export class ArticlesService {
         [Op.or]: [
           { title: { [Op.iLike]: q } },
           { excerpt: { [Op.iLike]: q } },
+          { source: { [Op.iLike]: q } },
           { tags: { [Op.iLike]: q } },
         ],
       },
