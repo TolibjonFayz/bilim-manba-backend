@@ -1,18 +1,52 @@
 import { Body, Controller, Post, Request, UseGuards } from '@nestjs/common';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
-import { ExplainDto } from './dto/explain.dto.ts';
 import { AiService } from './ai.service';
+
+// Render Cloudflare ortida turadi — req.ip proxy manzilini beradi,
+// shuning uchun haqiqiy mijoz IP sini headerlardan olamiz
+function clientIp(req: any): string {
+  const h = req.headers ?? {};
+  const xff = String(h['x-forwarded-for'] ?? '')
+    .split(',')
+    .map((s) => s.trim())
+    .filter(Boolean);
+  return (
+    h['cf-connecting-ip'] ??
+    h['true-client-ip'] ??
+    xff[xff.length - 1] ??
+    req.ip ??
+    'unknown'
+  );
+}
 
 @ApiTags('AI')
 @ApiBearerAuth()
-@UseGuards(JwtAuthGuard)
+@UseGuards(OptionalJwtGuard)
 @Controller('ai')
 export class AiController {
   constructor(private aiService: AiService) {}
 
+  // Login qilganlar — cheksiz; mehmonlar — kuniga 3 ta savol (IP bo'yicha)
   @Post('explain')
-  explain(@Body() body: { text: string; question: string; history?: any[] }) {
-    return this.aiService.explain(body.text, body.question, body.history ?? []);
+  async explain(
+    @Body() body: { text: string; question: string; history?: any[] },
+    @Request() req: any,
+  ) {
+    const ip = req.user ? null : clientIp(req);
+    const guestRemaining =
+      ip === null ? undefined : this.aiService.consumeGuestQuota(ip);
+
+    try {
+      const res = await this.aiService.explain(
+        body.text,
+        body.question,
+        body.history ?? [],
+      );
+      return { ...res, guestRemaining };
+    } catch (err) {
+      if (ip !== null) this.aiService.refundGuestQuota(ip);
+      throw err;
+    }
   }
 }
