@@ -7,6 +7,9 @@ import { NotificationsModule } from '../notifications/notifications.module';
 import { SubscribersModule } from '../subscribers/subscribers.module';
 import { PublishingService } from './publishing.service';
 import { TelegramService } from './telegram.service';
+import { InstagramService } from './instagram.service';
+import { SocialImageService } from './social-image.service';
+import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
   imports: [
@@ -14,8 +17,14 @@ import { TelegramService } from './telegram.service';
     MailerModule,
     NotificationsModule,
     SubscribersModule,
+    CloudinaryModule,
   ],
-  providers: [PublishingService, TelegramService],
-  exports: [PublishingService, TelegramService],
+  providers: [
+    PublishingService,
+    TelegramService,
+    InstagramService,
+    SocialImageService,
+  ],
+  exports: [PublishingService, TelegramService, InstagramService],
 })
 export class PublishingModule {}

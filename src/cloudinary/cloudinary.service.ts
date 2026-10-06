@@ -49,4 +49,22 @@ export class CloudinaryService {
 
     await cloudinary.uploader.destroy(publicId);
   }
+
+  /** Serverda yasalgan rasmni (masalan Instagram kartochkasi) yuklaydi */
+  async uploadBuffer(
+    buffer: Buffer,
+    folder: string,
+    publicId: string,
+  ): Promise<string> {
+    return new Promise((resolve, reject) => {
+      const stream = cloudinary.uploader.upload_stream(
+        { folder, public_id: publicId, overwrite: true, format: 'jpg' },
+        (error, result) => {
+          if (error) reject(error);
+          else resolve(result!.secure_url);
+        },
+      );
+      stream.end(buffer);
+    });
+  }
 }

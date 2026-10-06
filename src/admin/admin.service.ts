@@ -127,6 +127,14 @@ export class AdminService {
     return this.publishing.postToTelegramById(id);
   }
 
+  postToInstagram(id: number) {
+    return this.publishing.postToInstagramById(id);
+  }
+
+  socialPreview(id: number, format: 'feed' | 'story') {
+    return this.publishing.socialPreview(id, format);
+  }
+
   publishingStatus() {
     return this.publishing.status();
   }

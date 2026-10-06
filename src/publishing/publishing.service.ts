@@ -13,6 +13,16 @@ import { MailerService } from '../mailer/mailer.service';
 import { NotificationsService } from '../notifications/notifications.service';
 import { SubscribersService } from '../subscribers/subscribers.service';
 import { TelegramService } from './telegram.service';
+import { InstagramService } from './instagram.service';
+import { SocialImageService } from './social-image.service';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
+
+/**
+ * Model nusxasini oddiy obyektga aylantiradi. Article/Category modellarida
+ * `category` kabi maydonlar class field qilib e'lon qilingan va Sequelize
+ * getter'larini to'sadi — nusxada `article.category` undefined bo'lib qoladi.
+ */
+const plain = (a: any) => (typeof a?.get === 'function' ? a.get({ plain: true }) : a);
 
 // Timer ko'pi bilan shuncha kutadi, keyin bazani qayta tekshiradi
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
@@ -20,7 +30,8 @@ const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 /**
  * Maqola chop etilishi bilan bog'liq hamma narsa bir joyda:
  *  - rejalashtirilgan qoralamalarni vaqti kelganda chop etish
- *  - chop etilgandan keyin: email obunachilar, bildirishnomalar, Telegram
+ *  - chop etilgandan keyin: Telegram, Instagram (post + story),
+ *    bildirishnomalar, email obunachilar
  *
  * Neon bepul tarifida baza ishlatilmasa uxlaydi, shuning uchun bazani har
  * daqiqada so'ramaymiz: eng yaqin scheduledAt vaqtini bilib, aynan o'sha
@@ -39,6 +50,9 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     private readonly subscribers: SubscribersService,
     private readonly mailer: MailerService,
     private readonly notifications: NotificationsService,
+    private readonly instagram: InstagramService,
+    private readonly socialImages: SocialImageService,
+    private readonly cloudinary: CloudinaryService,
   ) {}
 
   onModuleInit() {
@@ -57,6 +71,8 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     } catch (err: any) {
       this.logger.error(`Rejalashtirilgan nashrda xato: ${err?.message}`);
     }
+    // Instagram tokeni muddati o'tmasin (haftada bir yangilanadi)
+    await this.instagram.refreshTokenIfNeeded();
     await this.refreshSchedule();
   }
 
@@ -134,6 +150,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     if (!article || article.status !== ArticleStatus.PUBLISHED) return;
 
     await this.postToTelegram(article);
+    await this.postToInstagram(article);
 
     try {
       await this.notifications.createForAllUsers(
@@ -170,7 +187,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
   async postToTelegram(article: Article, force = false): Promise<boolean> {
     if (article.telegramPostedAt && !force) return false;
     try {
-      const sent = await this.telegram.sendArticle(article as any);
+      const sent = await this.telegram.sendArticle(plain(article));
       if (sent) {
         await this.articleModel.update(
           { telegramPostedAt: new Date() },
@@ -187,6 +204,73 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Instagram'ga post va story — har biri bir marta (instagram*PostedAt).
+   * Rasm serverda yasaladi va Cloudinary'ga yuklanadi (Instagram rasmni
+   * ochiq manzildan o'zi yuklab oladi). force — admin "qayta yuborish".
+   */
+  async postToInstagram(article: Article, force = false) {
+    const result = { post: false, story: false };
+    if (!this.instagram.configured) {
+      if (force)
+        throw new Error('Instagram ulanmagan (INSTAGRAM_ACCESS_TOKEN)');
+      return result;
+    }
+    const jobs: { kind: 'post' | 'story'; done: Date | null }[] = [
+      { kind: 'post', done: article.instagramPostedAt },
+      { kind: 'story', done: article.instagramStoryPostedAt },
+    ];
+    for (const job of jobs) {
+      if (job.done && !force) continue;
+      try {
+        const format = job.kind === 'post' ? 'feed' : 'story';
+        const jpeg = await this.socialImages.render(plain(article), format);
+        const url = await this.cloudinary.uploadBuffer(
+          jpeg,
+          'bilim-manba/social',
+          `${article.slug}-${format}`.slice(0, 200),
+        );
+        await this.instagram.publishImage(url, {
+          story: job.kind === 'story',
+          caption:
+            job.kind === 'post'
+              ? this.instagram.buildCaption(plain(article))
+              : undefined,
+        });
+        await this.articleModel.update(
+          job.kind === 'post'
+            ? { instagramPostedAt: new Date() }
+            : { instagramStoryPostedAt: new Date() },
+          { where: { id: article.id } },
+        );
+        result[job.kind] = true;
+      } catch (err: any) {
+        this.logger.error(
+          `Instagram ${job.kind} yuborilmadi (${article.slug}): ${err?.message}`,
+        );
+        if (force) throw err;
+      }
+    }
+    return result;
+  }
+
+  async postToInstagramById(id: number) {
+    const article = await this.articleModel.findByPk(id, {
+      include: [{ model: Category, attributes: ['id', 'name'] }],
+    });
+    if (!article) throw new NotFoundException('Maqola topilmadi');
+    return this.postToInstagram(article, true);
+  }
+
+  /** Admin uchun: Instagram kartochkasini oldindan ko'rish (JPEG) */
+  async socialPreview(id: number, format: 'feed' | 'story') {
+    const article = await this.articleModel.findByPk(id, {
+      include: [{ model: Category, attributes: ['id', 'name'] }],
+    });
+    if (!article) throw new NotFoundException('Maqola topilmadi');
+    return this.socialImages.render(plain(article), format);
+  }
+
   async postToTelegramById(id: number) {
     const article = await this.articleModel.findByPk(id, {
       include: [{ model: Category, attributes: ['id', 'name'] }],
@@ -198,6 +282,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
   status() {
     return {
       telegramConfigured: this.telegram.configured,
+      instagramConfigured: this.instagram.configured,
       nextScheduledAt: this.nextScheduledAt,
     };
   }

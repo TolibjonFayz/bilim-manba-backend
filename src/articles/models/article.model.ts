@@ -63,6 +63,13 @@ export class Article extends Model {
   @Column({ type: DataType.DATE, allowNull: true })
   declare telegramPostedAt: Date | null;
 
+  // Instagram post va story yuborilgan vaqt
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare instagramPostedAt: Date | null;
+
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare instagramStoryPostedAt: Date | null;
+
   @Column({ type: DataType.STRING, allowNull: true })
   declare tags: string;
 

@@ -10,6 +10,9 @@ import {
   Request,
   UseInterceptors,
   UploadedFile,
+  Query,
+  StreamableFile,
+  Header,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -59,6 +62,27 @@ export class AdminController {
   @Post('articles/:id/telegram')
   postToTelegram(@Param('id') id: string) {
     return this.adminService.postToTelegram(+id);
+  }
+
+  // Maqolani Instagram'ga (qayta) yuborish: post + story
+  @Post('articles/:id/instagram')
+  postToInstagram(@Param('id') id: string) {
+    return this.adminService.postToInstagram(+id);
+  }
+
+  // Instagram kartochkasini oldindan ko'rish: ?format=feed | story
+  @Get('articles/:id/social-preview')
+  @Header('Content-Type', 'image/jpeg')
+  @Header('Cache-Control', 'no-store')
+  async socialPreview(
+    @Param('id') id: string,
+    @Query('format') format?: string,
+  ) {
+    const jpeg = await this.adminService.socialPreview(
+      +id,
+      format === 'story' ? 'story' : 'feed',
+    );
+    return new StreamableFile(jpeg);
   }
 
   // Avtomatik nashr holati: Telegram sozlanganmi, keyingi rejalashtirilgan vaqt
