@@ -31,6 +31,12 @@ export class DataMigrationsService implements OnModuleInit {
       'ALTER TABLE articles ADD COLUMN IF NOT EXISTS "source" VARCHAR(255)',
     );
     await this.sequelize.query(
+      'ALTER TABLE articles ADD COLUMN IF NOT EXISTS "scheduledAt" TIMESTAMPTZ',
+    );
+    await this.sequelize.query(
+      'ALTER TABLE articles ADD COLUMN IF NOT EXISTS "telegramPostedAt" TIMESTAMPTZ',
+    );
+    await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS data_migrations (
         id VARCHAR(255) PRIMARY KEY,
         "ranAt" TIMESTAMPTZ NOT NULL DEFAULT now()

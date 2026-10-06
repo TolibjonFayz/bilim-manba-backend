@@ -6,6 +6,14 @@ import {
 import { InjectModel } from '@nestjs/sequelize';
 import { CreateCategoryDto } from './dto/create-category.dto';
 import { Category } from './models/category.model';
+import { Article, ArticleStatus } from '../articles/models/article.model';
+
+// Kategoriya bilan faqat chop etilgan maqolalar — qoralamalar sanalmasin va ko'rinmasin
+const PUBLISHED_ARTICLES = {
+  model: Article,
+  where: { status: ArticleStatus.PUBLISHED },
+  required: false,
+};
 
 @Injectable()
 export class CategoriesService {
@@ -15,7 +23,7 @@ export class CategoriesService {
   async findAll() {
     return await this.categoryModel.findAll({
       order: [['id', 'ASC']],
-      include: { all: true },
+      include: [PUBLISHED_ARTICLES],
     });
   }
 
@@ -23,7 +31,7 @@ export class CategoriesService {
   async findBySlug(slug: string) {
     const category = await this.categoryModel.findOne({
       where: { name: slug },
-      include: { all: true },
+      include: [PUBLISHED_ARTICLES],
     });
     if (!category) throw new NotFoundException('Kategoriya topilmadi');
     return category;

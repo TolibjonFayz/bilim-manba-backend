@@ -55,6 +55,18 @@ export class AdminController {
     return this.adminService.updateArticle(+id, dto);
   }
 
+  // Maqolani Telegram kanalga (qayta) yuborish
+  @Post('articles/:id/telegram')
+  postToTelegram(@Param('id') id: string) {
+    return this.adminService.postToTelegram(+id);
+  }
+
+  // Avtomatik nashr holati: Telegram sozlanganmi, keyingi rejalashtirilgan vaqt
+  @Get('publishing/status')
+  publishingStatus() {
+    return this.adminService.publishingStatus();
+  }
+
   // Maqola o'chirish
   @Delete('articles/:id')
   deleteArticle(@Param('id') id: string) {

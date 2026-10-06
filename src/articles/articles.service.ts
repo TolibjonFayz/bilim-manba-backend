@@ -43,8 +43,9 @@ export class ArticlesService {
 
   // Maqola slug bo'yicha qidirish
   async findBySlug(slug: string, userId?: number) {
+    // Faqat chop etilgan — qoralamalar (AI yozgan, rejalashtirilgan) ochiq emas
     const article = await this.articleModel.findOne({
-      where: { slug },
+      where: { slug, status: ArticleStatus.PUBLISHED },
       include: [
         { model: Category, attributes: ['id', 'name', 'slug'] },
         { model: User, attributes: ['id', 'fullName'] },
@@ -70,7 +71,9 @@ export class ArticlesService {
   }
 
   async recordView(slug: string, userId?: number) {
-    const article = await this.articleModel.findOne({ where: { slug } });
+    const article = await this.articleModel.findOne({
+      where: { slug, status: ArticleStatus.PUBLISHED },
+    });
     if (!article) return { success: false };
 
     await article.increment('viewCount');

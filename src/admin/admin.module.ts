@@ -14,6 +14,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { SubscribersModule } from 'src/subscribers/subscribers.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
+import { PublishingModule } from 'src/publishing/publishing.module';
 
 @Module({
   imports: [
@@ -24,6 +25,7 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
     SubscribersModule,
     MailerModule,
     NotificationsModule,
+    PublishingModule,
   ],
   providers: [AdminService],
   controllers: [AdminController],

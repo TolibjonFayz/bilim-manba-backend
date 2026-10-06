@@ -54,6 +54,15 @@ export class Article extends Model {
   @Column({ type: DataType.INTEGER, defaultValue: 0 })
   declare viewCount: number;
 
+  // Qoralama shu vaqtda avtomatik chop etiladi (PublishingService).
+  // Ustunlar DataMigrationsService.ensureSchema orqali qo'shiladi.
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare scheduledAt: Date | null;
+
+  // Telegram kanalga yuborilgan vaqt — bir maqola ikki marta ketmasin
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare telegramPostedAt: Date | null;
+
   @Column({ type: DataType.STRING, allowNull: true })
   declare tags: string;
 

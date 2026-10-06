@@ -2,14 +2,12 @@ import { BadRequestException, Injectable } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { User } from '../users/models/user.model';
 import { Like } from '../likes/models/like.model';
-import { MailerService } from 'src/mailer/mailer.service';
 import { Article } from '../articles/models/article.model';
 import { Category } from '../categories/models/category.model';
 import { CloudflareService } from 'src/cloudflare/cloudflare.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
-import { SubscribersService } from 'src/subscribers/subscribers.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
-import { NotificationsService } from 'src/notifications/notifications.service';
+import { PublishingService } from 'src/publishing/publishing.service';
 
 @Injectable()
 export class AdminService {
@@ -21,9 +19,7 @@ export class AdminService {
     @InjectModel(Like) private likeModel: typeof Like,
     private cloudflareService: CloudflareService,
     private cloudinaryService: CloudinaryService,
-    private subscribersService: SubscribersService,
-    private mailerService: MailerService,
-    private notificationsService: NotificationsService,
+    private publishing: PublishingService,
   ) {}
 
   // Dashboard statistika
@@ -66,16 +62,17 @@ export class AdminService {
         slug = `${slug}-${Date.now()}`;
       }
 
-      const article = await this.articleModel.create({ ...dto, slug });
+      const article = await this.articleModel.create({
+        ...dto,
+        slug,
+        scheduledAt: this.parseSchedule(dto),
+      });
 
-      if (dto.status === 'published') {
-        await this.sendNewsletterToAll(article);
-        await this.notificationsService.createForAllUsers(
-          'Yangi maqola chiqdi! 📚',
-          article.title,
-          `/articles/${article.slug}`,
-        );
+      // Telegram, email obunachilar, bildirishnomalar — PublishingService
+      if (article.status === 'published') {
+        await this.publishing.afterPublish(article.id);
       }
+      await this.publishing.refreshSchedule();
 
       return article;
     } catch (error: any) {
@@ -88,8 +85,50 @@ export class AdminService {
 
   // Maqola yangilash
   async updateArticle(id: number, dto: any) {
-    await this.articleModel.update(dto, { where: { id } });
+    const before = await this.articleModel.findByPk(id);
+    const { status, ...rest } = dto ?? {};
+    if ('scheduledAt' in rest) {
+      // Chop etilgan maqolaga vaqt kerak emas
+      rest.scheduledAt =
+        (status ?? before?.status) === 'published'
+          ? null
+          : this.parseSchedule(rest);
+    }
+
+    await this.articleModel.update(rest, { where: { id } });
+
+    // Qoralama → chop etildi: sana yangilanadi va Telegram/email ishga tushadi
+    if (status === 'published' && before?.status !== 'published') {
+      await this.publishing.publish(id);
+    } else if (status) {
+      await this.articleModel.update({ status }, { where: { id } });
+    }
+    await this.publishing.refreshSchedule();
     return this.articleModel.findByPk(id);
+  }
+
+  /**
+   * Admin formadagi "chop etish vaqti". Bo'sh — rejalashtirilmagan.
+   * Faqat qoralama uchun ma'noli: chop etilgan maqolada vaqt saqlanmaydi.
+   */
+  private parseSchedule(dto: any): Date | null {
+    if (dto?.status === 'published') return null;
+    const raw = dto?.scheduledAt;
+    if (!raw) return null;
+    const d = new Date(raw);
+    if (Number.isNaN(d.getTime())) {
+      throw new BadRequestException("Chop etish vaqti noto'g'ri");
+    }
+    return d;
+  }
+
+  // Telegram'ga qo'lda (qayta) yuborish va nashr holati
+  postToTelegram(id: number) {
+    return this.publishing.postToTelegramById(id);
+  }
+
+  publishingStatus() {
+    return this.publishing.status();
   }
 
   // Maqola o'chirish
@@ -147,27 +186,5 @@ export class AdminService {
         { model: User, attributes: ['id', 'fullName'] },
       ],
     });
-  }
-
-  // Yangi metod qo'sh:
-  private async sendNewsletterToAll(article: any) {
-    try {
-      const subscribers = await this.subscribersService.getAllActive();
-
-      // Har bir subscriberga alohida email
-      const emailPromises = subscribers.map((sub) =>
-        this.mailerService.sendNewArticleEmail(
-          sub.email,
-          article.title,
-          article.slug,
-          article.excerpt,
-          article.coverImage,
-        ),
-      );
-
-      await Promise.allSettled(emailPromises);
-    } catch (error) {
-      console.error('Newsletter yuborishda xato:', error);
-    }
   }
 }
