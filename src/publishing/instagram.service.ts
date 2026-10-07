@@ -5,7 +5,8 @@ import { createHash } from 'crypto';
 import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 
-const GRAPH = 'https://graph.instagram.com';
+const GRAPH_IG = 'https://graph.instagram.com';
+const GRAPH_FB = 'https://graph.facebook.com';
 const CAPTION_LIMIT = 2200;
 const HASHTAG_LIMIT = 30;
 // Uzoq muddatli token 60 kun yashaydi — haftada bir yangilaymiz
@@ -19,14 +20,19 @@ export interface InstagramArticle {
 }
 
 /**
- * Instagram API (Instagram Login, graph.instagram.com) orqali post va story.
- * Facebook sahifasi kerak emas — Professional (Creator/Business) akkaunt yetadi.
+ * Instagram API orqali post va story. Ikki xil ulanishni qo'llaydi —
+ * qaysi biri ekanini token o'zi aytadi:
  *
- * Env (Render): INSTAGRAM_ACCESS_TOKEN — Meta dasturchi panelidagi
- * "Generate token" bergan uzoq muddatli token (60 kun).
- * Token haftada bir avtomatik yangilanadi va app_settings jadvalida saqlanadi,
- * shuning uchun env'dagi eski token muddati o'tib ketsa ham ishlayveradi.
- * Env'ga yangi token qo'yilsa — avtomatik o'shanga o'tadi.
+ *  - Instagram Login (token "IG..." bilan boshlanadi), graph.instagram.com.
+ *    Facebook sahifa kerak emas. Token 60 kun yashaydi — haftada bir
+ *    avtomatik yangilanadi.
+ *  - Facebook Login (token "EAA..." bilan boshlanadi), graph.facebook.com.
+ *    Instagram Professional akkaunt Facebook sahifaga ulangan bo'lishi kerak.
+ *    Env'ga uzoq muddatli foydalanuvchi tokeni qo'yiladi; undan sahifa tokeni
+ *    olinadi (u muddatsiz) va Instagram akkaunt IDsi topiladi.
+ *
+ * Env (Render): INSTAGRAM_ACCESS_TOKEN. Amaldagi token app_settings jadvalida
+ * saqlanadi; env'ga yangi token qo'yilsa — avtomatik o'shanga o'tadi.
  */
 @Injectable()
 export class InstagramService {
@@ -39,7 +45,7 @@ export class InstagramService {
   ) {}
 
   private get envToken() {
-    return this.config.get<string>('INSTAGRAM_ACCESS_TOKEN') ?? '';
+    return (this.config.get<string>('INSTAGRAM_ACCESS_TOKEN') ?? '').trim();
   }
 
   private get version() {
@@ -48,6 +54,15 @@ export class InstagramService {
 
   get configured(): boolean {
     return Boolean(this.envToken);
+  }
+
+  /** Facebook Login tokenlari "EAA" bilan boshlanadi */
+  private get viaFacebook(): boolean {
+    return this.envToken.startsWith('EAA');
+  }
+
+  private get graph() {
+    return this.viaFacebook ? GRAPH_FB : GRAPH_IG;
   }
 
   private fingerprint(t: string) {
@@ -72,18 +87,73 @@ export class InstagramService {
     );
   }
 
+  private async getJson(url: string) {
+    const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
+    const json: any = await res.json().catch(() => ({}));
+    if (!res.ok || json.error) {
+      throw new Error(json?.error?.message ?? `HTTP ${res.status}`);
+    }
+    return json;
+  }
+
+  /**
+   * Facebook Login: env tokenidan Instagram akkaunt ulangan sahifani topadi.
+   * Foydalanuvchi tokeni bo'lsa — sahifa tokeni olinadi (uzoq muddatli
+   * foydalanuvchi tokenidan olingan sahifa tokeni muddatsiz bo'ladi).
+   * Env'da sahifa tokeni bo'lsa — o'zi ishlatiladi.
+   */
+  private async resolveFacebook(
+    env: string,
+  ): Promise<{ token: string; igId: string }> {
+    const base = `${GRAPH_FB}/${this.version}`;
+    const t = encodeURIComponent(env);
+    try {
+      const pages = await this.getJson(
+        `${base}/me/accounts?fields=name,access_token,instagram_business_account&limit=100&access_token=${t}`,
+      );
+      const page = (pages.data ?? []).find(
+        (p: any) => p.instagram_business_account?.id,
+      );
+      if (page) {
+        this.logger.log(
+          `Instagram Facebook sahifa orqali ulandi: ${page.name}`,
+        );
+        return {
+          token: page.access_token ?? env,
+          igId: String(page.instagram_business_account.id),
+        };
+      }
+    } catch {
+      // Sahifa tokenida /me/accounts ishlamaydi — pastda sahifaning o'zini so'raymiz
+    }
+    const me = await this.getJson(
+      `${base}/me?fields=name,instagram_business_account&access_token=${t}`,
+    );
+    if (me.instagram_business_account?.id) {
+      return { token: env, igId: String(me.instagram_business_account.id) };
+    }
+    throw new Error(
+      'Facebook sahifaga ulangan Instagram Professional akkaunt topilmadi (token ruxsatlari: instagram_basic, instagram_content_publish, pages_show_list, pages_read_engagement, business_management)',
+    );
+  }
+
   /** Amaldagi token: bazadagi yangilangani, env o'zgargan bo'lsa — env'dagisi */
   private async token(): Promise<string> {
     const env = this.envToken;
     const stored = await this.getSetting('instagram_token');
     const source = await this.getSetting('instagram_token_env');
-    if (!stored || source?.value !== this.fingerprint(env)) {
-      await this.setSetting('instagram_token', env);
-      await this.setSetting('instagram_token_env', this.fingerprint(env));
-      this.userId = undefined;
-      return env;
+    if (stored && source?.value === this.fingerprint(env)) return stored.value;
+
+    this.userId = undefined;
+    let token = env;
+    if (this.viaFacebook) {
+      const r = await this.resolveFacebook(env);
+      token = r.token;
+      await this.setSetting('instagram_user_id', r.igId);
     }
-    return stored.value;
+    await this.setSetting('instagram_token', token);
+    await this.setSetting('instagram_token_env', this.fingerprint(env));
+    return token;
   }
 
   /** Token eskirmasin: haftada bir yangilanadi (tokendan 24 soat o'tgan bo'lishi kerak) */
@@ -91,18 +161,18 @@ export class InstagramService {
     if (!this.configured) return;
     try {
       const current = await this.token();
+      // Facebook sahifa tokeni muddatsiz — yangilash shart emas
+      if (this.viaFacebook) return;
       const row = await this.getSetting('instagram_token');
       if (
         row &&
         Date.now() - new Date(row.updatedAt).getTime() < REFRESH_EVERY_MS
       )
         return;
-      const url = `${GRAPH}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(current)}`;
-      const res = await fetch(url, { signal: AbortSignal.timeout(20000) });
-      const json: any = await res.json().catch(() => ({}));
-      if (!res.ok || !json.access_token) {
-        throw new Error(json?.error?.message ?? `HTTP ${res.status}`);
-      }
+      const json = await this.getJson(
+        `${GRAPH_IG}/refresh_access_token?grant_type=ig_refresh_token&access_token=${encodeURIComponent(current)}`,
+      );
+      if (!json.access_token) throw new Error("access_token yo'q");
       await this.setSetting('instagram_token', json.access_token);
       this.logger.log(
         `Instagram tokeni yangilandi (${Math.round((json.expires_in ?? 0) / 86400)} kun)`,
@@ -121,7 +191,7 @@ export class InstagramService {
   ) {
     const token = await this.token();
     const qs = new URLSearchParams({ ...params, access_token: token });
-    const url = `${GRAPH}/${this.version}/${path}`;
+    const url = `${this.graph}/${this.version}/${path}`;
     const res = await fetch(method === 'GET' ? `${url}?${qs}` : url, {
       method,
       ...(method === 'POST' ? { body: qs } : {}),
@@ -138,8 +208,15 @@ export class InstagramService {
 
   private async igUserId(): Promise<string> {
     if (!this.userId) {
-      const me = await this.api('GET', 'me', { fields: 'user_id,username' });
-      this.userId = String(me.user_id ?? me.id);
+      if (this.viaFacebook) {
+        await this.token();
+        const row = await this.getSetting('instagram_user_id');
+        if (!row?.value) throw new Error('Instagram akkaunt IDsi topilmadi');
+        this.userId = row.value;
+      } else {
+        const me = await this.api('GET', 'me', { fields: 'user_id,username' });
+        this.userId = String(me.user_id ?? me.id);
+      }
     }
     return this.userId;
   }
