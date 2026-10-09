@@ -15,6 +15,7 @@ import { ArticleView } from 'src/article-views/models/article-view.model';
 import { SubscribersModule } from 'src/subscribers/subscribers.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { PublishingModule } from 'src/publishing/publishing.module';
+import { DraftsModule } from 'src/drafts/drafts.module';
 
 @Module({
   imports: [
@@ -26,6 +27,7 @@ import { PublishingModule } from 'src/publishing/publishing.module';
     MailerModule,
     NotificationsModule,
     PublishingModule,
+    DraftsModule,
   ],
   providers: [AdminService],
   controllers: [AdminController],

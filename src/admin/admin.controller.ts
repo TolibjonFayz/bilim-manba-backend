@@ -18,6 +18,7 @@ import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AdminService } from './admin.service';
+import { DraftsService } from '../drafts/drafts.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -26,7 +27,10 @@ import { memoryStorage } from 'multer';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('admin')
 export class AdminController {
-  constructor(private adminService: AdminService) {}
+  constructor(
+    private adminService: AdminService,
+    private drafts: DraftsService,
+  ) {}
 
   // Dashboard statistika
   @Get('stats')
@@ -89,6 +93,30 @@ export class AdminController {
   @Get('publishing/status')
   publishingStatus() {
     return this.adminService.publishingStatus();
+  }
+
+  // AI qoralama: mavzu yoki Wikipedia havolasi bo'yicha (bo'sh — bugungi tanlangan maqola)
+  @Post('drafts/generate')
+  generateDraft(
+    @Request() req: any,
+    @Body() body: { topic?: string; categoryId?: number },
+  ) {
+    return this.drafts.generate({
+      topic: body?.topic,
+      categoryId: body?.categoryId ? +body.categoryId : undefined,
+      authorId: req.user?.userId,
+    });
+  }
+
+  // Kunlik AI qoralama sozlamalari va mavzular navbati
+  @Get('drafts/settings')
+  draftSettings() {
+    return this.drafts.getSettings();
+  }
+
+  @Put('drafts/settings')
+  updateDraftSettings(@Body() body: { daily?: boolean; topics?: string[] }) {
+    return this.drafts.updateSettings(body);
   }
 
   // Maqola o'chirish
