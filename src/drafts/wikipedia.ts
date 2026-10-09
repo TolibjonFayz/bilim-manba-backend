@@ -5,7 +5,6 @@
 
 // Wikimedia API'lari User-Agent talab qiladi
 const UA = 'BilimManba/1.0 (https://bilimmanba.uz)';
-// Groq bepul tarifi: so'rov (kirish + max javob) daqiqasiga ~8000 token
 const MAX_EXTRACT = 7000;
 
 export interface WikiSource {
@@ -74,6 +73,7 @@ async function englishTitle(lang: string, title: string) {
 export async function fetchArticle(
   lang: string,
   title: string,
+  maxChars = MAX_EXTRACT,
 ): Promise<WikiSource> {
   const j = await getJson(
     api(lang, {
@@ -99,7 +99,7 @@ export async function fetchArticle(
     lang,
     title: page.title,
     url: page.fullurl,
-    text: (cut > 0 ? text.slice(0, cut) : text).slice(0, MAX_EXTRACT),
+    text: (cut > 0 ? text.slice(0, cut) : text).slice(0, maxChars),
   };
 }
 
@@ -107,28 +107,72 @@ export async function fetchArticle(
  * Mavzu (o'zbekcha yoki inglizcha so'z) yoki Wikipedia havolasidan manba topadi.
  * Avval inglizcha Wikipedia (eng to'liq), topilmasa — o'zbekcha.
  */
-export async function findSource(topic: string): Promise<WikiSource> {
+export async function findSource(
+  topic: string,
+  maxChars = MAX_EXTRACT,
+): Promise<WikiSource> {
   const link = parseWikiUrl(topic);
-  if (link) return fetchArticle(link.lang, link.title);
+  if (link) return fetchArticle(link.lang, link.title, maxChars);
 
   const en = await search('en', topic);
-  if (en) return fetchArticle('en', en);
+  if (en) return fetchArticle('en', en, maxChars);
 
   const uz = await search('uz', topic);
   if (uz) {
     const enTitle = await englishTitle('uz', uz).catch(() => null);
-    return enTitle ? fetchArticle('en', enTitle) : fetchArticle('uz', uz);
+    return enTitle
+      ? fetchArticle('en', enTitle, maxChars)
+      : fetchArticle('uz', uz, maxChars);
   }
   throw new Error(`"${topic}" mavzusi Wikipedia'dan topilmadi`);
 }
 
 /** Inglizcha Wikipedia'ning bugungi tanlangan maqolasi (Today's featured article) */
-export async function featuredToday(date = new Date()): Promise<WikiSource> {
+export async function featuredToday(
+  date = new Date(),
+  maxChars = MAX_EXTRACT,
+): Promise<WikiSource> {
   const [y, m, d] = date.toISOString().slice(0, 10).split('-');
   const j = await getJson(
     `https://en.wikipedia.org/api/rest_v1/feed/featured/${y}/${m}/${d}`,
   );
   const title = j?.tfa?.titles?.normalized ?? j?.tfa?.title;
   if (!title) throw new Error('Bugungi tanlangan maqola topilmadi');
-  return fetchArticle('en', title);
+  return fetchArticle('en', title, maxChars);
+}
+
+/**
+ * Asosiy maqolaga mazmunan yaqin 1–2 ta boshqa Wikipedia maqolasi
+ * ("morelike:" qidiruvi: "Black hole" → "Supermassive black hole",
+ * "Timur" → "Timurid Empire"). Ro'yxat/xronologiya sahifalari olinmaydi.
+ */
+export async function related(
+  main: WikiSource,
+  count: number,
+  maxChars: number,
+): Promise<WikiSource[]> {
+  if (count <= 0) return [];
+  const j = await getJson(
+    api(main.lang, {
+      action: 'query',
+      list: 'search',
+      srsearch: `morelike:${main.title}`,
+      srlimit: '8',
+      srnamespace: '0',
+    }),
+  );
+  const titles: string[] = (j?.query?.search ?? [])
+    .map((r: any) => String(r.title))
+    .filter(
+      (t: string) =>
+        t !== main.title &&
+        !/\(disambiguation\)|^(List|Outline|Timeline|Index|Glossary) of/i.test(
+          t,
+        ),
+    )
+    .slice(0, count);
+  const out = await Promise.all(
+    titles.map((t) => fetchArticle(main.lang, t, maxChars).catch(() => null)),
+  );
+  return out.filter((x): x is WikiSource => Boolean(x));
 }

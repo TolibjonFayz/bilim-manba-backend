@@ -10,7 +10,6 @@ import { ConfigService } from '@nestjs/config';
 import { InjectConnection, InjectModel } from '@nestjs/sequelize';
 import { Op, QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
-import Groq from 'groq-sdk';
 import {
   Article,
   ArticleStatus,
@@ -19,10 +18,14 @@ import {
 import { Category } from '../categories/models/category.model';
 import { User } from '../users/models/user.model';
 import { CloudflareService } from '../cloudflare/cloudflare.service';
-import { featuredToday, findSource, WikiSource } from './wikipedia';
+import { featuredToday, findSource, related, WikiSource } from './wikipedia';
+import { ArxivPaper, searchArxiv } from './arxiv';
+import { createLlm, Llm } from './llm';
 
-// AI qoralamalarini shu belgi bilan taniymiz ("Nashr (Muallif)" ko'rinishi)
-export const AI_SOURCE = 'Wikipedia (Bilim Manba AI)';
+// AI qoralamalarini shu belgi bilan taniymiz (manbalar maqola oxirida)
+export const AI_SOURCE = 'Bilim Manba AI';
+// Birinchi versiyadagi belgi — eski qoralamalar ham hisobga olinsin
+const LEGACY_AI_SOURCE = 'Wikipedia (Bilim Manba AI)';
 // Ko'rib chiqilmagan AI qoralamalari shundan ko'p bo'lsa, kunlik qoralama yozilmaydi
 const MAX_PENDING = 3;
 // Kunlik qoralama Toshkent vaqti bilan shu soatdan keyin yoziladi
@@ -48,7 +51,13 @@ interface DraftJson {
   category?: string;
   tags?: string[];
   html?: string;
+  /** AI foydalangan manbalar raqamlari ([1], [2] ...) */
+  sources?: number[];
 }
+
+type Source =
+  | ({ kind: 'wikipedia' } & WikiSource)
+  | ({ kind: 'arxiv' } & ArxivPaper);
 
 /** Saytdagi matnlar bilan bir xil: o‘ → o', “ ” → " */
 const normalize = (s: string) =>
@@ -90,8 +99,10 @@ const tashkentDay = (d = new Date()) =>
   new Date(d.getTime() + TASHKENT_OFFSET_MS).toISOString().slice(0, 10);
 
 /**
- * AI qoralamalar: Wikipedia'dagi faktlar asosida o'zbekcha original maqola
- * yozadi va QORALAMA sifatida saqlaydi. Admin o'qib, muqova qo'yib, chop etadi
+ * AI qoralamalar: bir nechta erkin manbadan (Wikipedia'dagi asosiy va unga
+ * yaqin maqolalar — CC BY-SA, arXiv'dagi yangi ilmiy ishlar annotatsiyalari —
+ * CC0) faktlarni yig'ib, o'zbekcha original maqola yozadi va QORALAMA
+ * sifatida saqlaydi. Admin o'qib, muqova qo'yib, chop etadi
  * yoki rejalashtiradi — keyin Telegram/Instagram avtomatik ketadi.
  *
  * Kunlik rejim: har kuni Toshkent vaqti bilan 06:00 dan keyin bitta qoralama —
@@ -101,9 +112,8 @@ const tashkentDay = (d = new Date()) =>
 @Injectable()
 export class DraftsService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(DraftsService.name);
-  // Kalit bo'lmasa server baribir ishga tushsin — klient kerak bo'lganda yaratiladi
-  private groqClient?: Groq;
-  private readonly model: string;
+  /** Testlar uchun: soxta model */
+  llmOverride?: Llm;
   private timer?: NodeJS.Timeout;
   private dailyRunning = false;
 
@@ -114,15 +124,19 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     @InjectModel(User) private readonly userModel: typeof User,
     @InjectConnection() private readonly sequelize: Sequelize,
     private readonly cloudflare: CloudflareService,
-  ) {
-    this.model = this.config.get<string>('GROQ_MODEL') ?? 'openai/gpt-oss-120b';
-  }
+  ) {}
 
-  private get groq(): Groq {
-    this.groqClient ??= new Groq({
-      apiKey: this.config.get<string>('GROQ_API_KEY'),
-    });
-    return this.groqClient;
+  /** Gemini (kaliti bo'lsa) yoki Groq; kalit yo'q bo'lsa — null, server baribir ishlaydi */
+  private getLlm(): Llm | null {
+    return (
+      this.llmOverride ??
+      createLlm({
+        geminiKey: this.config.get<string>('GEMINI_API_KEY'),
+        geminiModel: this.config.get<string>('GEMINI_MODEL'),
+        groqKey: this.config.get<string>('GROQ_API_KEY'),
+        groqModel: this.config.get<string>('GROQ_MODEL'),
+      })
+    );
   }
 
   onModuleInit() {
@@ -165,7 +179,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     return this.articleModel.count({
       where: {
         status: ArticleStatus.DRAFT,
-        source: AI_SOURCE,
+        source: { [Op.in]: [AI_SOURCE, LEGACY_AI_SOURCE] },
         scheduledAt: { [Op.is]: null },
       },
     });
@@ -180,7 +194,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       this.pendingCount(),
     ]);
     return {
-      configured: Boolean(this.config.get<string>('GROQ_API_KEY')),
+      configured: Boolean(this.getLlm()),
+      model: this.getLlm()?.name ?? null,
       daily: daily !== 'off',
       dailyHour: DAILY_HOUR,
       maxPending: MAX_PENDING,
@@ -208,22 +223,52 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
 
   // ---------- Qoralama yozish ----------
 
+  /**
+   * Manbalarni yig'adi: asosiy Wikipedia maqolasi, katta modelda yana 1–2 ta
+   * yaqin maqola va arXiv'dagi so'nggi ishlar. Mavzusiz — bugungi tanlangan maqola.
+   */
+  private async gatherSources(topic: string, llm: Llm): Promise<Source[]> {
+    const big = llm.sourceBudget >= 20000;
+    const mainChars = big ? 14000 : 5500;
+    let main: WikiSource;
+    try {
+      main = topic
+        ? await findSource(topic, mainChars)
+        : await featuredToday(new Date(), mainChars);
+    } catch (err: any) {
+      throw new BadRequestException(err?.message ?? 'Manba topilmadi');
+    }
+    const [rel, papers] = await Promise.all([
+      related(main, big ? 2 : 0, 5000).catch(() => []),
+      main.lang === 'en'
+        ? searchArxiv(main.title, big ? 3 : 1).catch(() => [])
+        : Promise.resolve([] as ArxivPaper[]),
+    ]);
+    return [
+      { kind: 'wikipedia' as const, ...main },
+      ...rel.map((r) => ({ kind: 'wikipedia' as const, ...r })),
+      ...papers.map((p) => ({
+        kind: 'arxiv' as const,
+        ...p,
+        summary: p.summary.slice(0, 2000),
+      })),
+    ];
+  }
+
   /** Mavzu (yoki Wikipedia havolasi) bo'yicha qoralama; mavzusiz — bugungi tanlangan maqola */
   async generate(opts: {
     topic?: string;
     categoryId?: number;
     authorId?: number;
   }) {
-    if (!this.config.get<string>('GROQ_API_KEY')) {
-      throw new ServiceUnavailableException('GROQ_API_KEY sozlanmagan');
+    const llm = this.getLlm();
+    if (!llm) {
+      throw new ServiceUnavailableException(
+        'AI kaliti sozlanmagan (GEMINI_API_KEY yoki GROQ_API_KEY)',
+      );
     }
     const topic = String(opts.topic ?? '').trim();
-    let source: WikiSource;
-    try {
-      source = topic ? await findSource(topic) : await featuredToday();
-    } catch (err: any) {
-      throw new BadRequestException(err?.message ?? 'Manba topilmadi');
-    }
+    const sources = await this.gatherSources(topic, llm);
 
     // raw: Category modelida `name` class field — instance'da undefined bo'ladi
     const categories = (await this.categoryModel.findAll({
@@ -231,11 +276,12 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       raw: true,
     })) as unknown as { id: number; name: string }[];
     const draft = await this.write(
-      source,
+      llm,
+      sources,
       categories.map((c) => c.name),
     );
 
-    const title = normalize(draft.title ?? '').trim() || source.title;
+    const title = normalize(draft.title ?? '').trim() || sources[0].title;
     const category =
       categories.find((c) => c.id === Number(opts.categoryId)) ??
       categories.find(
@@ -250,10 +296,22 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    // AI ishlatgan manbalar; asosiy Wikipedia maqolasi doim ko'rsatiladi
+    const used = sources.filter(
+      (_, i) => i === 0 || (draft.sources ?? []).map(Number).includes(i + 1),
+    );
+    const items = used.map((src) =>
+      src.kind === 'wikipedia'
+        ? `<li><a href="${escapeHtml(src.url)}" target="_blank" rel="noopener">Wikipedia: ${escapeHtml(src.title)}</a> (CC BY-SA 4.0)</li>`
+        : `<li><a href="${escapeHtml(src.url)}" target="_blank" rel="noopener">${escapeHtml(src.title)}</a> — ${escapeHtml(
+            src.authors.slice(0, 3).join(', ') +
+              (src.authors.length > 3 ? ' va boshq.' : ''),
+          )}, arXiv, ${src.published.slice(0, 4)}</li>`,
+    );
     const content = `${html}
 <h2>Manbalar</h2>
-<ul><li><a href="${escapeHtml(source.url)}" target="_blank" rel="noopener">Wikipedia: ${escapeHtml(source.title)}</a> (CC BY-SA 4.0)</li></ul>
-<p><em>Maqola Wikipedia materiallari asosida sun'iy intellekt yordamida tayyorlangan. Matn <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.uz" target="_blank" rel="noopener">CC BY-SA 4.0</a> litsenziyasi ostida tarqatiladi.</em></p>`;
+<ul>${items.join('')}</ul>
+<p><em>Maqola yuqoridagi manbalar asosida sun'iy intellekt yordamida tayyorlangan. Matn <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.uz" target="_blank" rel="noopener">CC BY-SA 4.0</a> litsenziyasi ostida tarqatiladi.</em></p>`;
 
     let slug = slugify(title);
     if (await this.articleModel.findOne({ where: { slug } })) {
@@ -282,7 +340,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       categoryId: category?.id,
       authorId,
     } as any);
-    this.logger.log(`AI qoralama yaratildi: ${slug} (manba: ${source.url})`);
+    this.logger.log(
+      `AI qoralama yaratildi: ${slug} (${llm.name}; manbalar: ${used.map((u) => u.url).join(', ')})`,
+    );
     return article;
   }
 
@@ -295,50 +355,51 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   }
 
   private async write(
-    source: WikiSource,
+    llm: Llm,
+    sources: Source[],
     categories: string[],
   ): Promise<DraftJson> {
-    try {
-      const completion = await this.groq.chat.completions.create({
-        model: this.model,
-        messages: [
-          {
-            role: 'system',
-            content: `Sen Bilim Manba (bilimmanba.uz) — o'zbek tilidagi ilmiy-ommabop jurnal muallifisan. Senga Wikipedia'dan manba matni beriladi. Shu faktlar asosida o'zbek o'quvchisi uchun yangi, o'z so'zlaring bilan yozilgan qiziqarli maqola tayyorla.
-Qoidalar:
-- Til: o'zbek lotin yozuvi, tutuq belgisi uchun oddiy apostrof (o', g', ma'no). Ravon, jonli, tushunarli uslub.
-- Manbani gapma-gap tarjima qilma: tuzilishni o'zing qur, qiziqarli kirish bilan boshla, murakkab joylarni oddiy misol yoki taqqoslash bilan tushuntir.
-- Faqat manbadagi faktlarga tayan. Manbada yo'q raqam, sana, ism yoki iqtibos to'qima. Ishonchsiz bo'lsang, umumiyroq yoz.
-- Hajm: 700–1100 so'z, 3–6 ta <h2> bo'lim.
-- HTML: faqat <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. <h1>, rasm, havola va markdown ishlatma. "Manbalar" bo'limini yozma — uni tizim o'zi qo'shadi.
+    const system = `Sen Bilim Manba (bilimmanba.uz) — o'zbek tilidagi ilmiy-ommabop jurnalning eng yaxshi muallifisan. Uslubing Quanta Magazine, Kurzgesagt kabi: jonli, aniq, o'quvchini oxirigacha olib boradigan.
+Senga bir mavzu bo'yicha bir nechta raqamlangan manba beriladi: Wikipedia maqolalari va (bo'lsa) arXiv'dagi yangi ilmiy ishlarning annotatsiyalari. Ulardagi faktlarni birlashtirib, o'zbek o'quvchisi uchun yangi, o'z so'zlaring bilan yozilgan bitta yaxlit maqola tayyorla.
+
+Uslub va tuzilish:
+- Tutuq belgisi uchun oddiy apostrof (o', g', ma'no). Tabiiy, ravon o'zbek adabiy tili; tarjima ohangi, kalka va quruq ensiklopediya uslubidan qoch.
+- Qiziqarli "ilgak" bilan boshla: savol, kutilmagan fakt yoki kichik voqea. Keyin mavzu nega muhimligini ayt.
+- Murakkab tushunchalarni kundalik hayotdan olingan misol va taqqoslash bilan tushuntir. Atamani birinchi ishlatganda qisqa izohla.
+- Manbalarni gapma-gap tarjima qilma va birorta manbaning tuzilishini takrorlama — tuzilishni o'zing qur.
+- arXiv ishlari mavzuga aloqador bo'lsa, oxirroqda "So'nggi tadqiqotlar" ruhida qo'sh: nimani o'rganishgan, nima topishgan, nega qiziq — oddiy tilda. Ular hali taqrizdan o'tmagan preprint ekanini bir og'iz eslat. Aloqasiz bo'lsa, umuman ishlatma.
+- Kuchli xulosa bilan tugat: o'quvchi o'ylab qoladigan fikr yoki ochiq savol.
+
+Aniqlik:
+- Faqat manbalardagi faktlarga tayan. Manbada yo'q raqam, sana, ism yoki iqtibos to'qima. Ishonchsiz bo'lsang, umumiyroq yoz.
+
+Format:
+- Hajm: 900–1400 so'z, 4–7 ta <h2> bo'lim (kerak bo'lsa <h3>).
+- HTML: faqat <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. <h1>, rasm, havola, markdown va [1] kabi manba belgilarini matnga qo'yma. "Manbalar" bo'limini yozma — uni tizim o'zi qo'shadi.
 - title: qiziqarli, 40–90 belgi, aldamchi (clickbait) emas.
 - excerpt: 1–2 gap, 130–170 belgi; "Ushbu maqolada" bilan boshlanmasin.
 - category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
 - tags: 3–5 ta qisqa o'zbekcha teg.
-Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "html": "..."}`,
-          },
-          {
-            role: 'user',
-            content: `Manba: Wikipedia (${source.lang}) — "${source.title}"
+- sources: haqiqatan foydalangan manbalaringning raqamlari.
+Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "html": "..."}`;
 
-${source.text}`,
-          },
-        ],
-        response_format: { type: 'json_object' },
-        temperature: 0.6,
-        max_completion_tokens: 5000,
-        ...(this.model.startsWith('openai/gpt-oss')
-          ? { reasoning_effort: 'low' as const }
-          : {}),
-      });
-      const raw = completion.choices[0]?.message?.content ?? '';
+    const user = sources
+      .map((src, i) =>
+        src.kind === 'wikipedia'
+          ? `[${i + 1}] Wikipedia (${src.lang}) — "${src.title}"\n${src.text}`
+          : `[${i + 1}] arXiv ilmiy ishi (${src.published}; ${src.authors.slice(0, 3).join(', ')}) — "${src.title}"\nAnnotatsiya: ${src.summary}`,
+      )
+      .join('\n\n---\n\n');
+
+    try {
+      const raw = await llm.json(system, user);
       const json = JSON.parse(
         raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
       );
       if (!json?.html) throw new Error("JSON'da html yo'q");
       return json as DraftJson;
     } catch (err: any) {
-      this.logger.error(`AI qoralama xatosi (${this.model}): ${err?.message}`);
+      this.logger.error(`AI qoralama xatosi (${llm.name}): ${err?.message}`);
       throw new ServiceUnavailableException(
         `AI maqola yoza olmadi: ${String(err?.message ?? '').slice(0, 200)}`,
       );
@@ -377,7 +438,7 @@ ${source.text}`,
     now = new Date(),
   ): Promise<'done' | 'skipped' | 'failed'> {
     if (this.dailyRunning) return 'skipped';
-    if (!this.config.get<string>('GROQ_API_KEY')) return 'skipped';
+    if (!this.getLlm()) return 'skipped';
     const local = new Date(now.getTime() + TASHKENT_OFFSET_MS);
     if (local.getUTCHours() < DAILY_HOUR) return 'skipped';
     const today = tashkentDay(now);
