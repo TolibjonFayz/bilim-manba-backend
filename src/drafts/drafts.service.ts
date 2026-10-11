@@ -21,6 +21,8 @@ import { CloudflareService } from '../cloudflare/cloudflare.service';
 import { featuredToday, findSource, related, WikiSource } from './wikipedia';
 import { ArxivPaper, searchArxiv } from './arxiv';
 import { createLlm, Llm } from './llm';
+import { Cover, downloadImage, findCover } from './cover';
+import { CloudinaryService } from '../cloudinary/cloudinary.service';
 
 // AI qoralamalarini shu belgi bilan taniymiz (manbalar maqola oxirida)
 export const AI_SOURCE = 'Bilim Manba AI';
@@ -58,6 +60,44 @@ interface DraftJson {
 type Source =
   | ({ kind: 'wikipedia' } & WikiSource)
   | ({ kind: 'arxiv' } & ArxivPaper);
+
+/** Fonda yozilayotgan qoralama (Cloudflare 100 soniyadan uzun so'rovni uzadi) */
+export interface DraftJob {
+  id: number;
+  topic: string;
+  state: 'running' | 'done' | 'failed';
+  startedAt: string;
+  finishedAt?: string;
+  articleId?: number;
+  title?: string;
+  error?: string;
+}
+
+const plainLength = (html?: string) =>
+  String(html ?? '')
+    .replace(/<[^>]+>/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim().length;
+
+// Ikkala bosqich (muallif va muharrir) uchun umumiy til qoidalari
+const UZ_RULES = `O'zbek tili qoidalari:
+- Lotin yozuvi; tutuq belgisi va o', g' uchun oddiy apostrof (o', g', ma'no, ta'sir).
+- Tabiiy o'zbek gap qurilishi: kesim gap oxirida. 25 so'zdan uzun gapni bo'l; ergash gaplar zanjiridan qoch.
+- Rus va ingliz kalkalaridan qoch: "muhim rol o'ynaydi" o'rniga "muhim o'rin tutadi", "amalga oshirildi", "hisoblanadi", "mavjud" kabi qoliplarni keragidan ortiq ishlatma.
+- Ilmiy atamalarni o'zbek ilmiy adabiyotidagi shaklda yoz (qora tuynuk, tortishish kuchi, yorug'lik yili, hujayra, fotosintez). O'zbekcha muqobili bo'lmasa xalqaro atamani qoldir va birinchi marta qisqa izohla.
+- Sonlar: o'nli kasr vergul bilan (1,5); katta sonlar so'z bilan (4 million, 13,8 milliard); yillar "1915-yilda", asrlar "XX asr".
+- Xorijiy ismlarni o'zbekcha talaffuzda yoz (Albert Eynshteyn, Isaak Nyuton, Stiven Hoking) va birinchi tilga olinganda kimligini qisqa ayt.
+- O'quvchiga "siz" deb murojaat qil; jargon va haddan tashqari ko'tarinki, reklama ohangidagi iboralardan qoch.`;
+
+const FORMAT_RULES = (categories: string[]) => `Format:
+- Hajm: 900–1400 so'z, 4–7 ta <h2> bo'lim (kerak bo'lsa <h3>).
+- HTML: faqat <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. <h1>, rasm, havola, markdown va [1] kabi manba belgilarini matnga qo'yma. "Manbalar" bo'limini yozma — uni tizim o'zi qo'shadi.
+- title: qiziqarli, 40–90 belgi, aldamchi (clickbait) emas.
+- excerpt: 1–2 gap, 130–170 belgi; "Ushbu maqolada" bilan boshlanmasin.
+- category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
+- tags: 3–5 ta qisqa o'zbekcha teg.
+- sources: haqiqatan foydalangan manbalaringning raqamlari.
+Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "html": "..."}`;
 
 /** Saytdagi matnlar bilan bir xil: o‘ → o', “ ” → " */
 const normalize = (s: string) =>
@@ -124,7 +164,61 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     @InjectModel(User) private readonly userModel: typeof User,
     @InjectConnection() private readonly sequelize: Sequelize,
     private readonly cloudflare: CloudflareService,
+    private readonly cloudinary: CloudinaryService,
   ) {}
+
+  private job: DraftJob | null = null;
+  private jobSeq = 0;
+  private styleCache?: { at: number; text: string };
+
+  getJob(): DraftJob | null {
+    return this.job;
+  }
+
+  /**
+   * Qoralamani fonda yozishni boshlaydi va darhol javob qaytaradi —
+   * admin panel GET drafts/job orqali holatini kuzatadi.
+   */
+  startGenerate(opts: {
+    topic?: string;
+    categoryId?: number;
+    authorId?: number;
+  }): DraftJob {
+    if (this.job?.state === 'running') {
+      throw new BadRequestException(
+        'Hozir boshqa qoralama yozilmoqda — u tugashini kuting',
+      );
+    }
+    if (!this.getLlm()) {
+      throw new ServiceUnavailableException(
+        'AI kaliti sozlanmagan (GEMINI_API_KEY yoki GROQ_API_KEY)',
+      );
+    }
+    const job: DraftJob = {
+      id: ++this.jobSeq,
+      topic: String(opts.topic ?? '').trim(),
+      state: 'running',
+      startedAt: new Date().toISOString(),
+    };
+    this.job = job;
+    this.generate(opts)
+      .then((a) => {
+        Object.assign(job, {
+          state: 'done',
+          articleId: a.id,
+          title: a.title,
+          finishedAt: new Date().toISOString(),
+        });
+      })
+      .catch((err: any) => {
+        Object.assign(job, {
+          state: 'failed',
+          error: String(err?.message ?? 'Xato'),
+          finishedAt: new Date().toISOString(),
+        });
+      });
+    return job;
+  }
 
   /** Gemini (kaliti bo'lsa) yoki Groq; kalit yo'q bo'lsa — null, server baribir ishlaydi */
   private getLlm(): Llm | null {
@@ -296,6 +390,13 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       );
     }
 
+    let slug = slugify(title);
+    if (await this.articleModel.findOne({ where: { slug } })) {
+      slug = `${slug}-${Date.now()}`;
+    }
+    // Muqova: Commons'dagi erkin rasm (topilmasa — admin o'zi qo'yadi)
+    const cover = await this.coverFor(sources, slug);
+
     // AI ishlatgan manbalar; asosiy Wikipedia maqolasi doim ko'rsatiladi
     const used = sources.filter(
       (_, i) => i === 0 || (draft.sources ?? []).map(Number).includes(i + 1),
@@ -308,15 +409,17 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
               (src.authors.length > 3 ? ' va boshq.' : ''),
           )}, arXiv, ${src.published.slice(0, 4)}</li>`,
     );
+    if (cover) {
+      const c = cover.cover;
+      items.push(
+        `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, Wikimedia Commons</li>`,
+      );
+    }
     const content = `${html}
 <h2>Manbalar</h2>
 <ul>${items.join('')}</ul>
 <p><em>Maqola yuqoridagi manbalar asosida sun'iy intellekt yordamida tayyorlangan. Matn <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.uz" target="_blank" rel="noopener">CC BY-SA 4.0</a> litsenziyasi ostida tarqatiladi.</em></p>`;
 
-    let slug = slugify(title);
-    if (await this.articleModel.findOne({ where: { slug } })) {
-      slug = `${slug}-${Date.now()}`;
-    }
     const contentUrl = await this.cloudflare.uploadJson(
       { message: content },
       `${slug}-${Date.now()}.json`,
@@ -329,7 +432,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       excerpt: normalize(draft.excerpt ?? '').trim() || null,
       source: AI_SOURCE,
       content: contentUrl,
-      coverImage: null,
+      coverImage: cover?.url ?? null,
       type: ArticleType.FREE,
       status: ArticleStatus.DRAFT,
       tags: (draft.tags ?? [])
@@ -341,7 +444,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       authorId,
     } as any);
     this.logger.log(
-      `AI qoralama yaratildi: ${slug} (${llm.name}; manbalar: ${used.map((u) => u.url).join(', ')})`,
+      `AI qoralama yaratildi: ${slug} (${llm.name}; muqova: ${cover ? 'bor' : "yo'q"}; manbalar: ${used.map((u) => u.url).join(', ')})`,
     );
     return article;
   }
@@ -354,34 +457,134 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     return admin?.id;
   }
 
+  private async coverFor(
+    sources: Source[],
+    slug: string,
+  ): Promise<{ url: string; cover: Cover } | null> {
+    try {
+      const wiki = sources.filter(
+        (x): x is Extract<Source, { kind: 'wikipedia' }> =>
+          x.kind === 'wikipedia',
+      );
+      const cover = await findCover(
+        wiki[0].lang,
+        wiki.map((w) => w.title),
+        wiki[0].title,
+      );
+      if (!cover) return null;
+      const buf = await downloadImage(cover.imageUrl);
+      const url = await this.cloudinary.uploadBuffer(
+        buf,
+        'bilim-manba/covers',
+        slug.slice(0, 120),
+      );
+      return { url, cover };
+    } catch (err: any) {
+      this.logger.warn(`Muqova topilmadi (${slug}): ${err?.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Saytdagi eng ko'p o'qilgan (AI yozmagan) maqoladan 2500 belgilik parcha —
+   * AI ohang va uslubni shundan oladi. 12 soat keshda turadi.
+   */
+  private async styleSample(): Promise<string> {
+    if (this.styleCache && Date.now() - this.styleCache.at < 12 * 3600 * 1000) {
+      return this.styleCache.text;
+    }
+    let text = '';
+    try {
+      const top = (await this.articleModel.findOne({
+        where: {
+          status: ArticleStatus.PUBLISHED,
+          content: { [Op.ne]: null },
+          [Op.or]: [
+            { source: { [Op.is]: null } },
+            { source: { [Op.notIn]: [AI_SOURCE, LEGACY_AI_SOURCE] } },
+          ],
+        },
+        order: [['viewCount', 'DESC']],
+        attributes: ['content'],
+        raw: true,
+      })) as unknown as { content: string } | null;
+      if (top?.content) {
+        const res = await fetch(top.content, {
+          signal: AbortSignal.timeout(15000),
+        });
+        const j: any = await res.json();
+        text = String(j?.message ?? '')
+          .replace(/<[^>]+>/g, ' ')
+          .replace(/\s+/g, ' ')
+          .trim()
+          .slice(0, 2500);
+      }
+    } catch (err: any) {
+      this.logger.warn(`Uslub namunasi olinmadi: ${err?.message}`);
+    }
+    this.styleCache = { at: Date.now(), text };
+    return text;
+  }
+
+  private async callJson(
+    llm: Llm,
+    system: string,
+    user: string,
+    stage: string,
+  ): Promise<DraftJson> {
+    try {
+      const raw = await llm.json(system, user);
+      const json = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      if (!json?.html) throw new Error("JSON'da html yo'q");
+      return json as DraftJson;
+    } catch (err: any) {
+      this.logger.error(`AI ${stage} xatosi (${llm.name}): ${err?.message}`);
+      throw new ServiceUnavailableException(
+        `AI maqola yoza olmadi: ${String(err?.message ?? '').slice(0, 200)}`,
+      );
+    }
+  }
+
+  /**
+   * 1-bosqich: muallif manbalardan maqola yozadi.
+   * 2-bosqich (katta modelda): bosh muharrir faktlarni manbalarga solishtiradi,
+   * tilni silliqlaydi va o'qishlilikni oshiradi. Muharrir xato bersa —
+   * muallif varianti qoladi.
+   */
   private async write(
     llm: Llm,
     sources: Source[],
     categories: string[],
   ): Promise<DraftJson> {
-    const system = `Sen Bilim Manba (bilimmanba.uz) — o'zbek tilidagi ilmiy-ommabop jurnalning eng yaxshi muallifisan. Uslubing Quanta Magazine, Kurzgesagt kabi: jonli, aniq, o'quvchini oxirigacha olib boradigan.
+    const big = llm.sourceBudget >= 20000;
+    const style = big ? await this.styleSample() : '';
+
+    const writer = `Sen Bilim Manba (bilimmanba.uz) — o'zbek tilidagi ilmiy-ommabop jurnalning eng yaxshi muallifisan. Uslubing Quanta Magazine, Kurzgesagt kabi: jonli, aniq, o'quvchini oxirigacha olib boradigan.
 Senga bir mavzu bo'yicha bir nechta raqamlangan manba beriladi: Wikipedia maqolalari va (bo'lsa) arXiv'dagi yangi ilmiy ishlarning annotatsiyalari. Ulardagi faktlarni birlashtirib, o'zbek o'quvchisi uchun yangi, o'z so'zlaring bilan yozilgan bitta yaxlit maqola tayyorla.
 
 Uslub va tuzilish:
-- Tutuq belgisi uchun oddiy apostrof (o', g', ma'no). Tabiiy, ravon o'zbek adabiy tili; tarjima ohangi, kalka va quruq ensiklopediya uslubidan qoch.
 - Qiziqarli "ilgak" bilan boshla: savol, kutilmagan fakt yoki kichik voqea. Keyin mavzu nega muhimligini ayt.
-- Murakkab tushunchalarni kundalik hayotdan olingan misol va taqqoslash bilan tushuntir. Atamani birinchi ishlatganda qisqa izohla.
+- Murakkab tushunchalarni kundalik hayotdan olingan misol va taqqoslash bilan tushuntir (imkon bo'lsa, o'zbek o'quvchisiga tanish misollar). Atamani birinchi ishlatganda qisqa izohla.
 - Manbalarni gapma-gap tarjima qilma va birorta manbaning tuzilishini takrorlama — tuzilishni o'zing qur.
+- Har bir bo'lim yangi narsa bersin; suv, takror va bo'sh umumiy gaplar bo'lmasin.
 - arXiv ishlari mavzuga aloqador bo'lsa, oxirroqda "So'nggi tadqiqotlar" ruhida qo'sh: nimani o'rganishgan, nima topishgan, nega qiziq — oddiy tilda. Ular hali taqrizdan o'tmagan preprint ekanini bir og'iz eslat. Aloqasiz bo'lsa, umuman ishlatma.
 - Kuchli xulosa bilan tugat: o'quvchi o'ylab qoladigan fikr yoki ochiq savol.
 
 Aniqlik:
 - Faqat manbalardagi faktlarga tayan. Manbada yo'q raqam, sana, ism yoki iqtibos to'qima. Ishonchsiz bo'lsang, umumiyroq yoz.
 
-Format:
-- Hajm: 900–1400 so'z, 4–7 ta <h2> bo'lim (kerak bo'lsa <h3>).
-- HTML: faqat <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. <h1>, rasm, havola, markdown va [1] kabi manba belgilarini matnga qo'yma. "Manbalar" bo'limini yozma — uni tizim o'zi qo'shadi.
-- title: qiziqarli, 40–90 belgi, aldamchi (clickbait) emas.
-- excerpt: 1–2 gap, 130–170 belgi; "Ushbu maqolada" bilan boshlanmasin.
-- category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
-- tags: 3–5 ta qisqa o'zbekcha teg.
-- sources: haqiqatan foydalangan manbalaringning raqamlari.
-Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "html": "..."}`;
+${UZ_RULES}
+${
+  style
+    ? `
+Saytimizdagi o'quvchilar yoqtirgan maqoladan parcha — undan faqat ohang va uslubni ol, mazmunini ishlatma:
+"""${style}"""
+`
+    : ''
+}
+${FORMAT_RULES(categories)}`;
 
     const user = sources
       .map((src, i) =>
@@ -391,18 +594,42 @@ Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": 
       )
       .join('\n\n---\n\n');
 
+    const draft = await this.callJson(llm, writer, user, 'yozish');
+    if (!big) return draft;
+
+    const editor = `Sen Bilim Manba jurnalining bosh muharririsan va o'zbek tili bo'yicha mutaxassissan. Senga manbalar va muallif yozgan qoralama (JSON) beriladi. Vazifang — uni nashrga tayyor, eng yuqori sifatli holga keltirish:
+1. Faktlarni tekshir: manbalarda tasdiqlanmagan yoki noto'g'ri raqam, sana, ism va da'volarni tuzat yoki olib tashla.
+2. Tilni silliqla: har bir gapni quyidagi qoidalar bo'yicha ko'rib chiq; g'aliz va tarjima ohangidagi jumlalarni tabiiy o'zbekchaga o'gir; imlo va tinish belgilari xatolarini tuzat.
+3. O'qishlilik: ilgakni kuchaytir; takror, suv va bo'sh umumiy gaplarni olib tashla; misollar aniq va esda qoladigan bo'lsin; bo'limlar mantiqan ulansin; xulosa kuchli bo'lsin.
+4. Sarlavha va tavsifni yanada qiziqarli, lekin halol qil.
+5. Hajm va tuzilishni saqla (900–1400 so'z); maqolani qisqartirib yuborma.
+
+${UZ_RULES}
+
+${FORMAT_RULES(categories)}
+To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
+
     try {
-      const raw = await llm.json(system, user);
-      const json = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      const revised = await this.callJson(
+        llm,
+        editor,
+        `MANBALAR:\n\n${user}\n\n=====\n\nQORALAMA (JSON):\n${JSON.stringify(draft)}`,
+        'tahrir',
       );
-      if (!json?.html) throw new Error("JSON'da html yo'q");
-      return json as DraftJson;
-    } catch (err: any) {
-      this.logger.error(`AI qoralama xatosi (${llm.name}): ${err?.message}`);
-      throw new ServiceUnavailableException(
-        `AI maqola yoza olmadi: ${String(err?.message ?? '').slice(0, 200)}`,
-      );
+      // Muharrir maqolani keskin qisqartirib yuborgan bo'lsa — muallif varianti
+      if (plainLength(revised.html) < plainLength(draft.html) * 0.7) {
+        this.logger.warn(
+          'Muharrir matnni juda qisqartirdi — muallif varianti olindi',
+        );
+        return draft;
+      }
+      return {
+        ...draft,
+        ...revised,
+        sources: revised.sources ?? draft.sources,
+      };
+    } catch {
+      return draft;
     }
   }
 

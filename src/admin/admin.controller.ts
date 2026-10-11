@@ -95,17 +95,23 @@ export class AdminController {
     return this.adminService.publishingStatus();
   }
 
-  // AI qoralama: mavzu yoki Wikipedia havolasi bo'yicha (bo'sh — bugungi tanlangan maqola)
+  // AI qoralama (fonda): mavzu yoki Wikipedia havolasi bo'yicha (bo'sh — bugungi tanlangan maqola)
   @Post('drafts/generate')
   generateDraft(
     @Request() req: any,
     @Body() body: { topic?: string; categoryId?: number },
   ) {
-    return this.drafts.generate({
+    return this.drafts.startGenerate({
       topic: body?.topic,
       categoryId: body?.categoryId ? +body.categoryId : undefined,
       authorId: req.user?.userId,
     });
+  }
+
+  // Fonda yozilayotgan qoralama holati
+  @Get('drafts/job')
+  draftJob() {
+    return { job: this.drafts.getJob() };
   }
 
   // Kunlik AI qoralama sozlamalari va mavzular navbati
