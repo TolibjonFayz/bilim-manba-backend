@@ -19,6 +19,12 @@ export interface Llm {
   /** Manba matnlari uchun belgilar byudjeti (model konteksti/limitlariga qarab) */
   sourceBudget: number;
   json(system: string, user: string): Promise<string>;
+  /** Rasmlarni ko'ra oladigan model (faqat Gemini): matn + rasmlar → JSON */
+  vision?(
+    system: string,
+    user: string,
+    images: { mime: string; data: string }[],
+  ): Promise<string>;
 }
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
@@ -26,46 +32,62 @@ const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
 export function createLlm(cfg: LlmConfig): Llm | null {
   if (cfg.geminiKey) {
     const model = cfg.geminiModel || 'gemini-flash-latest';
+    const call = async (
+      system: string,
+      parts: any[],
+      maxOutputTokens: number,
+    ) => {
+      const res = await fetch(
+        `${GEMINI}/${encodeURIComponent(model)}:generateContent`,
+        {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'x-goog-api-key': cfg.geminiKey!,
+          },
+          body: JSON.stringify({
+            systemInstruction: { parts: [{ text: system }] },
+            contents: [{ role: 'user', parts }],
+            generationConfig: {
+              responseMimeType: 'application/json',
+              temperature: 0.7,
+              maxOutputTokens,
+            },
+          }),
+          signal: AbortSignal.timeout(170000),
+        },
+      );
+      const j: any = await res.json().catch(() => ({}));
+      if (!res.ok) {
+        throw new Error(`Gemini ${res.status}: ${j?.error?.message ?? ''}`);
+      }
+      const out = j?.candidates?.[0]?.content?.parts ?? [];
+      const text = out
+        .filter((p: any) => !p.thought)
+        .map((p: any) => p.text ?? '')
+        .join('');
+      if (!text) {
+        throw new Error(
+          `Gemini bo'sh javob (${j?.candidates?.[0]?.finishReason ?? j?.promptFeedback?.blockReason ?? '?'})`,
+        );
+      }
+      return text;
+    };
     return {
       name: `gemini:${model}`,
       sourceBudget: 30000,
-      async json(system, user) {
-        const res = await fetch(
-          `${GEMINI}/${encodeURIComponent(model)}:generateContent`,
-          {
-            method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'x-goog-api-key': cfg.geminiKey!,
-            },
-            body: JSON.stringify({
-              systemInstruction: { parts: [{ text: system }] },
-              contents: [{ role: 'user', parts: [{ text: user }] }],
-              generationConfig: {
-                responseMimeType: 'application/json',
-                temperature: 0.7,
-                maxOutputTokens: 32000,
-              },
-            }),
-            signal: AbortSignal.timeout(170000),
-          },
-        );
-        const j: any = await res.json().catch(() => ({}));
-        if (!res.ok) {
-          throw new Error(`Gemini ${res.status}: ${j?.error?.message ?? ''}`);
-        }
-        const parts = j?.candidates?.[0]?.content?.parts ?? [];
-        const text = parts
-          .filter((p: any) => !p.thought)
-          .map((p: any) => p.text ?? '')
-          .join('');
-        if (!text) {
-          throw new Error(
-            `Gemini bo'sh javob (${j?.candidates?.[0]?.finishReason ?? j?.promptFeedback?.blockReason ?? '?'})`,
-          );
-        }
-        return text;
-      },
+      json: (system, user) => call(system, [{ text: user }], 32000),
+      vision: (system, user, images) =>
+        call(
+          system,
+          [
+            { text: user },
+            ...images.map((im) => ({
+              inline_data: { mime_type: im.mime, data: im.data },
+            })),
+          ],
+          4000,
+        ),
     };
   }
 

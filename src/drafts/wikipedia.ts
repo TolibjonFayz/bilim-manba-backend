@@ -7,6 +7,12 @@
 const UA = 'BilimManba/1.0 (https://bilimmanba.uz)';
 const MAX_EXTRACT = 7000;
 
+/**
+ * Mavzu haqiqatan yo'q (tarmoq xatosidan farqli) — kunlik rejimda bunday
+ * mavzu navbatdan chiqariladi, tarmoq xatosida esa navbatda qoladi.
+ */
+export class WikiNotFoundError extends Error {}
+
 export interface WikiSource {
   lang: string;
   title: string;
@@ -89,7 +95,9 @@ export async function fetchArticle(
   const page = j?.query?.pages?.[0];
   const text = String(page?.extract ?? '').trim();
   if (!page || page.missing || text.length < 300) {
-    throw new Error(`Wikipedia'da "${title}" bo'yicha yetarli matn topilmadi`);
+    throw new WikiNotFoundError(
+      `Wikipedia'da "${title}" bo'yicha yetarli matn topilmadi`,
+    );
   }
   // "Manbalar", "Havolalar" kabi oxirgi bo'limlar kerak emas
   const cut = text.search(
@@ -124,7 +132,7 @@ export async function findSource(
       ? fetchArticle('en', enTitle, maxChars)
       : fetchArticle('uz', uz, maxChars);
   }
-  throw new Error(`"${topic}" mavzusi Wikipedia'dan topilmadi`);
+  throw new WikiNotFoundError(`"${topic}" mavzusi Wikipedia'dan topilmadi`);
 }
 
 /** Inglizcha Wikipedia'ning bugungi tanlangan maqolasi (Today's featured article) */
@@ -137,7 +145,7 @@ export async function featuredToday(
     `https://en.wikipedia.org/api/rest_v1/feed/featured/${y}/${m}/${d}`,
   );
   const title = j?.tfa?.titles?.normalized ?? j?.tfa?.title;
-  if (!title) throw new Error('Bugungi tanlangan maqola topilmadi');
+  if (!title) throw new WikiNotFoundError('Bugungi tanlangan maqola topilmadi');
   return fetchArticle('en', title, maxChars);
 }
 

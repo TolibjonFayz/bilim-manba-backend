@@ -18,10 +18,24 @@ import {
 import { Category } from '../categories/models/category.model';
 import { User } from '../users/models/user.model';
 import { CloudflareService } from '../cloudflare/cloudflare.service';
-import { featuredToday, findSource, related, WikiSource } from './wikipedia';
+import {
+  featuredToday,
+  findSource,
+  related,
+  WikiNotFoundError,
+  WikiSource,
+} from './wikipedia';
 import { ArxivPaper, searchArxiv } from './arxiv';
 import { createLlm, Llm } from './llm';
-import { Cover, downloadImage, findCover } from './cover';
+import sharp from 'sharp';
+import {
+  commonsCandidates,
+  downloadImage,
+  ImageCandidate,
+  nasaCandidates,
+  openverseCandidates,
+  pexelsCandidates,
+} from './images';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 
 // AI qoralamalarini shu belgi bilan taniymiz (manbalar maqola oxirida)
@@ -55,6 +69,8 @@ interface DraftJson {
   html?: string;
   /** AI foydalangan manbalar raqamlari ([1], [2] ...) */
   sources?: number[];
+  /** Muqova rasmini qidirish uchun inglizcha so'zlar */
+  imageQueries?: string[];
 }
 
 type Source =
@@ -97,7 +113,8 @@ const FORMAT_RULES = (categories: string[]) => `Format:
 - category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
 - tags: 3–5 ta qisqa o'zbekcha teg.
 - sources: haqiqatan foydalangan manbalaringning raqamlari.
-Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "html": "..."}`;
+- imageQueries: muqova rasmini topish uchun 2–3 ta INGLIZCHA qidiruv so'zi — aniq, ko'rinadigan obyekt (masalan "Messier 87 black hole", "Registan Samarkand", "Lionel Messi World Cup"), mavhum so'zlar emas.
+Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "imageQueries": ["..."], "html": "..."}`;
 
 /** Saytdagi matnlar bilan bir xil: o‘ → o', “ ” → " */
 const normalize = (s: string) =>
@@ -327,10 +344,16 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     let main: WikiSource;
     try {
       main = topic
-        ? await findSource(topic, mainChars)
+        ? await this.findTopic(topic, mainChars, llm)
         : await featuredToday(new Date(), mainChars);
     } catch (err: any) {
-      throw new BadRequestException(err?.message ?? 'Manba topilmadi');
+      if (err instanceof WikiNotFoundError) {
+        throw new BadRequestException(err.message);
+      }
+      // Tarmoq/Wikipedia xatosi — mavzu aybdor emas (kunlik navbatda qoladi)
+      throw new ServiceUnavailableException(
+        `Wikipedia bilan aloqa bo'lmadi: ${err?.message ?? 'xato'}. Birozdan keyin qayta urinib ko'ring.`,
+      );
     }
     const [rel, papers] = await Promise.all([
       related(main, big ? 2 : 0, 5000).catch(() => []),
@@ -347,6 +370,45 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
         summary: p.summary.slice(0, 2000),
       })),
     ];
+  }
+
+  /**
+   * Mavzuni Wikipedia'dan topadi. Topilmasa (masalan, uzun o'zbekcha sarlavha
+   * yozilgan bo'lsa) — AI mos inglizcha Wikipedia maqola nomlarini taklif qiladi.
+   */
+  private async findTopic(
+    topic: string,
+    maxChars: number,
+    llm: Llm,
+  ): Promise<WikiSource> {
+    try {
+      return await findSource(topic, maxChars);
+    } catch (first) {
+      let titles: string[] = [];
+      try {
+        const raw = await llm.json(
+          `Foydalanuvchi maqola mavzusini yozdi (o'zbekcha yoki boshqa tilda, sarlavha ko'rinishida bo'lishi mumkin). Shu mavzu bo'yicha ma'lumot beradigan eng mos INGLIZCHA Wikipedia maqolalarining aniq nomlarini top (1–3 ta, eng mosi birinchi). Javob faqat JSON: {"titles": ["..."]}`,
+          topic,
+        );
+        const j = JSON.parse(
+          raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+        );
+        titles = (Array.isArray(j?.titles) ? j.titles : [])
+          .map((t: unknown) => String(t ?? '').trim())
+          .filter(Boolean)
+          .slice(0, 3);
+      } catch {
+        // AI yordam bera olmadi — asl xatoni qaytaramiz
+      }
+      for (const t of titles) {
+        try {
+          return await findSource(t, maxChars);
+        } catch {
+          // keyingi nomni sinaymiz
+        }
+      }
+      throw first;
+    }
   }
 
   /** Mavzu (yoki Wikipedia havolasi) bo'yicha qoralama; mavzusiz — bugungi tanlangan maqola */
@@ -394,8 +456,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     if (await this.articleModel.findOne({ where: { slug } })) {
       slug = `${slug}-${Date.now()}`;
     }
-    // Muqova: Commons'dagi erkin rasm (topilmasa — admin o'zi qo'yadi)
-    const cover = await this.coverFor(sources, slug);
+    // Muqova: erkin rasmlar orasidan AI tanlaydi (topilmasa — admin o'zi qo'yadi)
+    const cover = await this.coverFor(llm, sources, draft, title, slug);
 
     // AI ishlatgan manbalar; asosiy Wikipedia maqolasi doim ko'rsatiladi
     const used = sources.filter(
@@ -412,7 +474,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     if (cover) {
       const c = cover.cover;
       items.push(
-        `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, Wikimedia Commons</li>`,
+        `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, ${escapeHtml(c.provider)}</li>`,
       );
     }
     const content = `${html}
@@ -457,31 +519,157 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     return admin?.id;
   }
 
+  /**
+   * Muqova: bir nechta erkin rasm bazasidan nomzodlar yig'iladi, Gemini ularni
+   * ko'rib eng mos va chiroylisini tanlaydi. Tanlangan rasm 1600px gacha
+   * kichraytirilib Cloudinary'ga yuklanadi.
+   */
   private async coverFor(
+    llm: Llm,
     sources: Source[],
+    draft: DraftJson,
+    title: string,
     slug: string,
-  ): Promise<{ url: string; cover: Cover } | null> {
+  ): Promise<{ url: string; cover: ImageCandidate } | null> {
     try {
-      const wiki = sources.filter(
-        (x): x is Extract<Source, { kind: 'wikipedia' }> =>
-          x.kind === 'wikipedia',
-      );
-      const cover = await findCover(
-        wiki[0].lang,
-        wiki.map((w) => w.title),
-        wiki[0].title,
-      );
-      if (!cover) return null;
-      const buf = await downloadImage(cover.imageUrl);
-      const url = await this.cloudinary.uploadBuffer(
-        buf,
-        'bilim-manba/covers',
-        slug.slice(0, 120),
-      );
-      return { url, cover };
+      const candidates = await this.imageCandidates(sources, draft);
+      if (!candidates.length) return null;
+      const order = await this.rankImages(llm, candidates, title, draft);
+      for (const c of order) {
+        try {
+          let raw: Buffer | null = null;
+          for (const u of [c.imageUrl, ...(c.altUrls ?? [])]) {
+            raw = await downloadImage(u).catch(() => null);
+            if (raw) break;
+          }
+          if (!raw) throw new Error('hech bir nusxa yuklanmadi');
+          const img = sharp(raw, { failOn: 'none' }).rotate();
+          const meta = await img.metadata();
+          if ((meta.width ?? 0) < 900) continue;
+          const jpeg = await img
+            .resize({ width: 1600, withoutEnlargement: true })
+            .jpeg({ quality: 85, mozjpeg: true })
+            .toBuffer();
+          const url = await this.cloudinary.uploadBuffer(
+            jpeg,
+            'bilim-manba/covers',
+            slug.slice(0, 120),
+          );
+          return { url, cover: c };
+        } catch (err: any) {
+          this.logger.warn(
+            `Muqova yuklanmadi (${c.imageUrl}): ${err?.message}`,
+          );
+        }
+      }
+      return null;
     } catch (err: any) {
       this.logger.warn(`Muqova topilmadi (${slug}): ${err?.message}`);
       return null;
+    }
+  }
+
+  private async imageCandidates(
+    sources: Source[],
+    draft: DraftJson,
+  ): Promise<ImageCandidate[]> {
+    const wiki = sources.filter(
+      (x): x is Extract<Source, { kind: 'wikipedia' }> =>
+        x.kind === 'wikipedia',
+    );
+    const queries = [
+      ...(draft.imageQueries ?? []).map((q) => String(q ?? '').trim()),
+      wiki[0].title.replace(/\s*\(.*?\)\s*/g, ' ').trim(),
+    ]
+      .filter(Boolean)
+      .filter(
+        (q, i, all) =>
+          all.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i,
+      )
+      .slice(0, 3);
+    const pexelsKey = this.config.get<string>('PEXELS_API_KEY');
+    const settled = await Promise.allSettled([
+      commonsCandidates(
+        wiki[0].lang,
+        wiki.map((w) => w.title),
+      ),
+      ...queries.map((q) => openverseCandidates(q, 4)),
+      nasaCandidates(queries[0], 3),
+      ...(pexelsKey ? [pexelsCandidates(queries[0], pexelsKey, 4)] : []),
+    ]);
+    const seen = new Set<string>();
+    return settled
+      .flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
+      .filter((c) => {
+        const key = c.imageUrl.split('?')[0];
+        if (seen.has(key)) return false;
+        seen.add(key);
+        return true;
+      })
+      .slice(0, 14);
+  }
+
+  /**
+   * Gemini nomzodlarning kichik nusxalarini ko'rib, eng mosini tanlaydi.
+   * Ko'ra olmaydigan model yoki xato bo'lsa — manba maqolalarining rasmi birinchi.
+   */
+  private async rankImages(
+    llm: Llm,
+    candidates: ImageCandidate[],
+    title: string,
+    draft: DraftJson,
+  ): Promise<ImageCandidate[]> {
+    if (!llm.vision || candidates.length < 2) return candidates;
+    try {
+      const thumbs = await Promise.all(
+        candidates.map(async (c) => {
+          try {
+            // Kichik nusxa bo'lmasa — kattasini olib o'zimiz kichraytiramiz
+            const buf = await downloadImage(c.thumbUrl, 5_000_000).catch(() =>
+              downloadImage(c.imageUrl, 15_000_000),
+            );
+            const small = await sharp(buf, { failOn: 'none' })
+              .resize({ width: 384, withoutEnlargement: true })
+              .jpeg({ quality: 70 })
+              .toBuffer();
+            return { c, data: small.toString('base64') };
+          } catch {
+            return null;
+          }
+        }),
+      );
+      const ok = thumbs.filter((t): t is { c: ImageCandidate; data: string } =>
+        Boolean(t),
+      );
+      if (ok.length < 2) return candidates;
+      const raw = await llm.vision(
+        `Sen ilmiy-ommabop jurnalning foto-muharririsan. Maqola uchun muqova rasmini tanlaysan. Rasmlar tartib bilan berilgan (birinchisi 0-raqam).
+Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa); qo'rqinchli yoki nomaqbul bo'lmasin.
+Eng yaxshisidan boshlab eng ko'pi 4 ta mos rasm raqamini qaytar. Hech biri mos bo'lmasa — bo'sh ro'yxat.
+Javob faqat JSON: {"ranking": [n, ...], "reason": "qisqa izoh"}`,
+        `Maqola sarlavhasi: ${title}\nTavsif: ${draft.excerpt ?? ''}\n\nRasmlar: ${ok
+          .map((t, i) => `${i}) ${t.c.title} — ${t.c.provider}`)
+          .join('; ')}`,
+        ok.map((t) => ({ mime: 'image/jpeg', data: t.data })),
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      const picked: ImageCandidate[] = (
+        Array.isArray(j?.ranking) ? j.ranking : []
+      )
+        .map((n: unknown) => ok[Number(n)]?.c)
+        .filter((c: ImageCandidate | undefined): c is ImageCandidate =>
+          Boolean(c),
+        );
+      this.logger.log(
+        `Muqova tanlandi: ${picked[0]?.title ?? "yo'q"} (${ok.length} ta nomzoddan; ${String(j?.reason ?? '').slice(0, 120)})`,
+      );
+      // AI hech birini mos topmadi — muqovasiz qoldiramiz (admin o'zi qo'yadi)
+      return picked;
+    } catch (err: any) {
+      this.logger.warn(`Rasmni AI tanlay olmadi: ${err?.message}`);
+      return candidates;
     }
   }
 
