@@ -19,6 +19,8 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { AdminService } from './admin.service';
 import { DraftsService } from '../drafts/drafts.service';
+import { Period, StatsService } from '../stats/stats.service';
+import { SearchConsoleService } from '../search-console/search-console.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -30,6 +32,8 @@ export class AdminController {
   constructor(
     private adminService: AdminService,
     private drafts: DraftsService,
+    private stats: StatsService,
+    private searchConsole: SearchConsoleService,
   ) {}
 
   // Dashboard statistika
@@ -38,10 +42,28 @@ export class AdminController {
     return this.adminService.getStats();
   }
 
-  // Barcha userlar
+  // Barcha userlar — faollik ko'rsatkichlari bilan
   @Get('users')
   getUsers() {
-    return this.adminService.getUsers();
+    return this.stats.users();
+  }
+
+  // Statistika hisoboti: day | week | month | year
+  @Get('stats/report')
+  statsReport(@Query('period') period: string) {
+    return this.stats.report((period || 'week') as Period);
+  }
+
+  // Google Search Console: umumiy ko'rinish (7 | 28 | 90 kun)
+  @Get('search-console')
+  searchConsoleOverview(@Query('days') days: string) {
+    return this.searchConsole.overview(Number(days) || 28);
+  }
+
+  // Google Search Console: so'nggi maqolalar indekslanganmi
+  @Get('search-console/indexing')
+  searchConsoleIndexing(@Query('refresh') refresh: string) {
+    return this.searchConsole.indexing(20, refresh === '1');
   }
 
   // Barcha maqolalar

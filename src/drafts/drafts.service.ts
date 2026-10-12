@@ -244,6 +244,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       createLlm({
         geminiKey: this.config.get<string>('GEMINI_API_KEY'),
         geminiModel: this.config.get<string>('GEMINI_MODEL'),
+        geminiFallbacks: this.config.get<string>('GEMINI_FALLBACK_MODELS'),
         groqKey: this.config.get<string>('GROQ_API_KEY'),
         groqModel: this.config.get<string>('GROQ_MODEL'),
       })
@@ -588,14 +589,19 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       )
       .slice(0, 3);
     const pexelsKey = this.config.get<string>('PEXELS_API_KEY');
+    // Pexels birinchi: professional, chiroyli fotolar (kaliti bo'lsa)
     const settled = await Promise.allSettled([
+      ...(pexelsKey
+        ? queries
+            .slice(0, 2)
+            .map((q, i) => pexelsCandidates(q, pexelsKey, i ? 3 : 6))
+        : []),
       commonsCandidates(
         wiki[0].lang,
         wiki.map((w) => w.title),
       ),
-      ...queries.map((q) => openverseCandidates(q, 4)),
-      nasaCandidates(queries[0], 3),
-      ...(pexelsKey ? [pexelsCandidates(queries[0], pexelsKey, 4)] : []),
+      ...queries.map((q) => openverseCandidates(q, 3)),
+      nasaCandidates(queries[0], 2),
     ]);
     const seen = new Set<string>();
     return settled
@@ -606,7 +612,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
         seen.add(key);
         return true;
       })
-      .slice(0, 14);
+      .slice(0, 16);
   }
 
   /**
@@ -645,6 +651,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       const raw = await llm.vision(
         `Sen ilmiy-ommabop jurnalning foto-muharririsan. Maqola uchun muqova rasmini tanlaysan. Rasmlar tartib bilan berilgan (birinchisi 0-raqam).
 Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa); qo'rqinchli yoki nomaqbul bo'lmasin.
+Pexels rasmlari professional fotograflarning ishlari — mavzuga mos bo'lsa, ularni birinchi navbatda tanla; Pexels'da mosi bo'lmasa, boshqalaridan tanla.
 Eng yaxshisidan boshlab eng ko'pi 4 ta mos rasm raqamini qaytar. Hech biri mos bo'lmasa — bo'sh ro'yxat.
 Javob faqat JSON: {"ranking": [n, ...], "reason": "qisqa izoh"}`,
         `Maqola sarlavhasi: ${title}\nTavsif: ${draft.excerpt ?? ''}\n\nRasmlar: ${ok

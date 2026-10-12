@@ -77,6 +77,15 @@ export class ArticlesService {
     if (!article) return { success: false };
 
     await article.increment('viewCount');
+    // Kunlik hisobot uchun (Toshkent sanasi bo'yicha)
+    await this.articleModel.sequelize
+      ?.query(
+        `INSERT INTO daily_views ("articleId", day, views)
+         VALUES (:id, ((now() AT TIME ZONE 'UTC') + interval '5 hours')::date, 1)
+         ON CONFLICT ("articleId", day) DO UPDATE SET views = daily_views.views + 1`,
+        { replacements: { id: article.id } },
+      )
+      .catch(() => {});
 
     if (userId) {
       await this.articleViewModel

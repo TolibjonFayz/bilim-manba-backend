@@ -42,6 +42,19 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'ALTER TABLE articles ADD COLUMN IF NOT EXISTS "instagramStoryPostedAt" TIMESTAMPTZ',
     );
+    // Kunlik ko'rishlar (mehmonlar ham) — statistika hisobotlari uchun.
+    // day — Toshkent sanasi
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS daily_views (
+        "articleId" INTEGER NOT NULL,
+        day DATE NOT NULL,
+        views INTEGER NOT NULL DEFAULT 0,
+        PRIMARY KEY ("articleId", day)
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS daily_views_day_idx ON daily_views (day)',
+    );
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS app_settings (
         key VARCHAR(100) PRIMARY KEY,

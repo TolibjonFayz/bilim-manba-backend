@@ -26,8 +26,9 @@ export class AdminService {
   async getStats() {
     const [userCount, articleCount, viewCount, likeCount] = await Promise.all([
       this.userModel.count(),
-      this.articleModel.count(),
-      this.articleViewModel.count(),
+      this.articleModel.count({ where: { status: 'published' } }),
+      // Barcha o'qishlar (mehmonlar ham) — article_views faqat login qilganlarni yozadi
+      this.articleModel.sum('viewCount').then((n) => Number(n) || 0),
       this.likeModel.count(),
     ]);
 

@@ -16,6 +16,8 @@ import { SubscribersModule } from 'src/subscribers/subscribers.module';
 import { NotificationsModule } from 'src/notifications/notifications.module';
 import { PublishingModule } from 'src/publishing/publishing.module';
 import { DraftsModule } from 'src/drafts/drafts.module';
+import { StatsService } from 'src/stats/stats.service';
+import { SearchConsoleService } from 'src/search-console/search-console.service';
 
 @Module({
   imports: [
@@ -29,7 +31,7 @@ import { DraftsModule } from 'src/drafts/drafts.module';
     PublishingModule,
     DraftsModule,
   ],
-  providers: [AdminService],
+  providers: [AdminService, StatsService, SearchConsoleService],
   controllers: [AdminController],
 })
 export class AdminModule {}

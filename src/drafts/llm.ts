@@ -10,6 +10,8 @@ import Groq from 'groq-sdk';
 export interface LlmConfig {
   geminiKey?: string;
   geminiModel?: string;
+  /** Asosiy model band bo'lsa (503/429) — vergul bilan ajratilgan zaxira modellar */
+  geminiFallbacks?: string;
   groqKey?: string;
   groqModel?: string;
 }
@@ -28,11 +30,57 @@ export interface Llm {
 }
 
 const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
+// Gemini bepul tarifida "high demand" (503) va limit (429) xatolari tez-tez
+// vaqtinchalik bo'ladi — kutib qayta uriniladi, keyin zaxira modelga o'tiladi
+const RETRY_DELAYS_MS = [0, 5000, 15000];
+const RETRYABLE = new Set([429, 500, 503, 504]);
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+class GeminiHttpError extends Error {
+  constructor(
+    readonly status: number,
+    message: string,
+  ) {
+    super(message);
+  }
+}
 
 export function createLlm(cfg: LlmConfig): Llm | null {
   if (cfg.geminiKey) {
     const model = cfg.geminiModel || 'gemini-flash-latest';
+    const models = [
+      model,
+      ...(cfg.geminiFallbacks ?? 'gemini-2.5-flash,gemini-flash-lite-latest')
+        .split(',')
+        .map((m) => m.trim())
+        .filter((m) => m && m !== model),
+    ];
     const call = async (
+      system: string,
+      parts: any[],
+      maxOutputTokens: number,
+    ) => {
+      let last: unknown;
+      for (const m of models) {
+        for (const delay of RETRY_DELAYS_MS) {
+          if (delay) await sleep(delay);
+          try {
+            return await callModel(m, system, parts, maxOutputTokens);
+          } catch (err: any) {
+            last = err;
+            const retryable =
+              err instanceof GeminiHttpError
+                ? RETRYABLE.has(err.status)
+                : err?.name === 'TimeoutError' ||
+                  /fetch failed/i.test(String(err?.message));
+            if (!retryable) throw err;
+          }
+        }
+      }
+      throw last;
+    };
+    const callModel = async (
+      model: string,
       system: string,
       parts: any[],
       maxOutputTokens: number,
@@ -59,7 +107,10 @@ export function createLlm(cfg: LlmConfig): Llm | null {
       );
       const j: any = await res.json().catch(() => ({}));
       if (!res.ok) {
-        throw new Error(`Gemini ${res.status}: ${j?.error?.message ?? ''}`);
+        throw new GeminiHttpError(
+          res.status,
+          `Gemini ${res.status}: ${j?.error?.message ?? ''}`,
+        );
       }
       const out = j?.candidates?.[0]?.content?.parts ?? [];
       const text = out
