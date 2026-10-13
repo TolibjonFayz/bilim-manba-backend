@@ -322,7 +322,13 @@ export class SearchConsoleService {
     for (const a of articles) {
       const url = `${this.publicSite}/articles/${a.slug}`;
       let hit = cache[url];
-      if (refresh || !hit || Date.now() - hit.at > INSPECT_TTL_MS) {
+      // Havolasiz eski yozuvlar (birinchi versiya) ham qayta tekshiriladi
+      if (
+        refresh ||
+        !hit ||
+        !hit.link ||
+        Date.now() - hit.at > INSPECT_TTL_MS
+      ) {
         try {
           const j = await this.api('POST', INSPECT, {
             inspectionUrl: url,
@@ -336,6 +342,9 @@ export class SearchConsoleService {
             coverageState: r.coverageState ?? null,
             lastCrawlTime: r.lastCrawlTime ?? null,
             googleCanonical: r.googleCanonical ?? null,
+            // Google o'zi beradigan havola — Search Console'da shu URL tekshiruvi
+            // ochiladi ("Indekslashni so'rash" tugmasi o'sha yerda)
+            link: j?.inspectionResult?.inspectionResultLink ?? null,
           };
           cache[url] = hit;
         } catch (err: any) {
@@ -357,8 +366,11 @@ export class SearchConsoleService {
         coverageState: hit.coverageState,
         lastCrawlTime: hit.lastCrawlTime,
         checkedAt: hit.at ? new Date(hit.at).toISOString() : null,
-        // Search Console'da shu URL'ni ochib, "Indekslashni so'rash" tugmasini bosish uchun
-        inspectLink: `https://search.google.com/search-console/inspect?resource_id=${encodeURIComponent(site)}&id=${encodeURIComponent(url)}`,
+        // Google'ning havolasi bo'lmasa — Search Console bosh sahifasi
+        // (tepadagi qidiruvga URL'ni qo'yib tekshirsa bo'ladi)
+        inspectLink:
+          hit.link ??
+          `https://search.google.com/search-console?resource_id=${encodeURIComponent(site)}`,
       });
     }
     // Eski yozuvlar to'planib qolmasin — faqat ro'yxatdagilar saqlanadi
