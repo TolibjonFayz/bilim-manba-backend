@@ -71,6 +71,8 @@ interface DraftJson {
   sources?: number[];
   /** Muqova rasmini qidirish uchun inglizcha so'zlar */
   imageQueries?: string[];
+  /** Mavzu umumiy auditoriya uchun mosmi (false — qoralama yozilmaydi) */
+  familySafe?: boolean;
 }
 
 type Source =
@@ -103,7 +105,8 @@ const UZ_RULES = `O'zbek tili qoidalari:
 - Ilmiy atamalarni o'zbek ilmiy adabiyotidagi shaklda yoz (qora tuynuk, tortishish kuchi, yorug'lik yili, hujayra, fotosintez). O'zbekcha muqobili bo'lmasa xalqaro atamani qoldir va birinchi marta qisqa izohla.
 - Sonlar: o'nli kasr vergul bilan (1,5); katta sonlar so'z bilan (4 million, 13,8 milliard); yillar "1915-yilda", asrlar "XX asr".
 - Xorijiy ismlarni o'zbekcha talaffuzda yoz (Albert Eynshteyn, Isaak Nyuton, Stiven Hoking) va birinchi tilga olinganda kimligini qisqa ayt.
-- O'quvchiga "siz" deb murojaat qil; jargon va haddan tashqari ko'tarinki, reklama ohangidagi iboralardan qoch.`;
+- O'quvchiga "siz" deb murojaat qil; jargon va haddan tashqari ko'tarinki, reklama ohangidagi iboralardan qoch.
+- Maqola oilaviy auditoriyaga (bolalar va o'smirlar ham) mos bo'lsin: jinsiy, shahvoniy yoki shok (qon, qiynoq) tafsilotlarni yozma; zarur bo'lsa, umumiy va ehtiyotkor tilda ayt.`;
 
 const FORMAT_RULES = (categories: string[]) => `Format:
 - Hajm: 900–1400 so'z, 4–7 ta <h2> bo'lim (kerak bo'lsa <h3>).
@@ -113,8 +116,9 @@ const FORMAT_RULES = (categories: string[]) => `Format:
 - category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
 - tags: 3–5 ta qisqa o'zbekcha teg.
 - sources: haqiqatan foydalangan manbalaringning raqamlari.
+- familySafe: maqola mavzusi va mazmuni umumiy auditoriya (bolalar va o'smirlar ham) uchun mos bo'lsa true; jinsiy, pornografik yoki o'ta shafqatsiz mavzu bo'lsa false.
 - imageQueries: muqova rasmini topish uchun 2–3 ta INGLIZCHA qidiruv so'zi — aniq, ko'rinadigan obyekt (masalan "Messier 87 black hole", "Registan Samarkand", "Lionel Messi World Cup"), mavhum so'zlar emas.
-Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "imageQueries": ["..."], "html": "..."}`;
+Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "familySafe": true, "imageQueries": ["..."], "html": "..."}`;
 
 /** Saytdagi matnlar bilan bir xil: o‘ → o', “ ” → " */
 const normalize = (s: string) =>
@@ -446,6 +450,12 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
           c.name.toLowerCase() === String(draft.category ?? '').toLowerCase(),
       ) ??
       categories[0];
+    // Mavzu 18+ bo'lsa (kunlik rejimda Wikipedia'dan tasodifan kelishi mumkin) — to'xtaymiz
+    if (draft.familySafe === false) {
+      throw new BadRequestException(
+        'Mavzu umumiy auditoriya uchun mos emas (18+) — qoralama yozilmadi',
+      );
+    }
     const html = sanitizeHtml(draft.html ?? '');
     if (html.replace(/<[^>]+>/g, '').length < 1500) {
       throw new ServiceUnavailableException(
@@ -551,6 +561,13 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
             .resize({ width: 1600, withoutEnlargement: true })
             .jpeg({ quality: 85, mozjpeg: true })
             .toBuffer();
+          // Yakuniy qavat: aynan yuklanadigan rasm yana bir bor tekshiriladi
+          if (!(await this.imageIsSafe(llm, jpeg, c))) {
+            this.logger.warn(
+              `Muqova xavfsizlik tekshiruvidan o'tmadi: ${c.title}`,
+            );
+            continue;
+          }
           const url = await this.cloudinary.uploadBuffer(
             jpeg,
             'bilim-manba/covers',
@@ -567,6 +584,51 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     } catch (err: any) {
       this.logger.warn(`Muqova topilmadi (${slug}): ${err?.message}`);
       return null;
+    }
+  }
+
+  /**
+   * Rasm hamma uchun (o'smirlar ham) mos ekanini Gemini qat'iy tekshiradi.
+   * Javob bo'lmasa yoki xato bo'lsa — rasm ishlatilmaydi (shubhada — rasmsiz).
+   * Rasmni ko'ra olmaydigan model bilan faqat Pexels/NASA rasmlariga ruxsat.
+   */
+  private async imageIsSafe(
+    llm: Llm,
+    jpeg: Buffer,
+    c: ImageCandidate,
+  ): Promise<boolean> {
+    if (!llm.vision) return Boolean(c.trusted);
+    try {
+      const small = await sharp(jpeg)
+        .resize({ width: 512, withoutEnlargement: true })
+        .jpeg({ quality: 75 })
+        .toBuffer();
+      const raw = await llm.vision(
+        `Sen ta'lim saytining kontent xavfsizligi bo'yicha qat'iy moderatorisan. Sayt o'quvchilari orasida bolalar va o'smirlar ham bor. Rasmda quyidagilardan BIRORTASI bo'lsa — xavfli:
+- har qanday yalang'ochlik, shu jumladan san'at asari, haykal, tarixiy yoki tibbiy rasm;
+- ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar;
+- jinsiy mazmun yoki ishora;
+- qon, jarohat, murda, zo'ravonlik, qiynoq, qatl;
+- giyohvand moddalar, o'z-o'ziga zarar.
+Shubha bo'lsa ham — xavfli deb belgila.
+Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
+        `Rasm: ${c.title} — ${c.provider}`,
+        [{ mime: 'image/jpeg', data: small.toString('base64') }],
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      if (j?.safe !== true) {
+        this.logger.warn(
+          `Xavfli deb topildi: ${c.title} (${String(j?.reason ?? '').slice(0, 120)})`,
+        );
+      }
+      return j?.safe === true;
+    } catch (err: any) {
+      this.logger.warn(
+        `Xavfsizlik tekshiruvi bajarilmadi (${c.title}): ${err?.message}`,
+      );
+      return false;
     }
   }
 
@@ -616,8 +678,10 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Gemini nomzodlarning kichik nusxalarini ko'rib, eng mosini tanlaydi.
-   * Ko'ra olmaydigan model yoki xato bo'lsa — manba maqolalarining rasmi birinchi.
+   * Gemini nomzodlarning kichik nusxalarini ko'rib, eng mosini tanlaydi va
+   * 18+/shok rasmlarni alohida belgilaydi (ular hech qachon tanlanmaydi).
+   * Ko'ra olmaydigan model yoki xato bo'lsa — faqat ishonchli bazalar
+   * (Pexels, NASA) qoladi: Commons/Openverse rasmlari tekshiruvsiz ishlatilmaydi.
    */
   private async rankImages(
     llm: Llm,
@@ -625,7 +689,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     title: string,
     draft: DraftJson,
   ): Promise<ImageCandidate[]> {
-    if (!llm.vision || candidates.length < 2) return candidates;
+    const trustedOnly = () => candidates.filter((c) => c.trusted);
+    if (!llm.vision) return trustedOnly();
     try {
       const thumbs = await Promise.all(
         candidates.map(async (c) => {
@@ -647,13 +712,14 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       const ok = thumbs.filter((t): t is { c: ImageCandidate; data: string } =>
         Boolean(t),
       );
-      if (ok.length < 2) return candidates;
+      if (!ok.length) return [];
       const raw = await llm.vision(
         `Sen ilmiy-ommabop jurnalning foto-muharririsan. Maqola uchun muqova rasmini tanlaysan. Rasmlar tartib bilan berilgan (birinchisi 0-raqam).
-Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa); qo'rqinchli yoki nomaqbul bo'lmasin.
+AVVAL XAVFSIZLIK: sayt o'quvchilari orasida bolalar va o'smirlar bor. Quyidagilardan birortasi bo'lgan rasmlarni "unsafe" ro'yxatiga yoz va hech qachon tanlama: har qanday yalang'ochlik (san'at asari, haykal, tarixiy yoki tibbiy rasm bo'lsa ham); ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar; jinsiy mazmun yoki ishora; qon, jarohat, murda, zo'ravonlik, qatl; giyohvand moddalar. Shubha bo'lsa ham — unsafe.
+Keyin qolganlaridan tanla. Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa).
 Pexels rasmlari professional fotograflarning ishlari — mavzuga mos bo'lsa, ularni birinchi navbatda tanla; Pexels'da mosi bo'lmasa, boshqalaridan tanla.
 Eng yaxshisidan boshlab eng ko'pi 4 ta mos rasm raqamini qaytar. Hech biri mos bo'lmasa — bo'sh ro'yxat.
-Javob faqat JSON: {"ranking": [n, ...], "reason": "qisqa izoh"}`,
+Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izoh"}`,
         `Maqola sarlavhasi: ${title}\nTavsif: ${draft.excerpt ?? ''}\n\nRasmlar: ${ok
           .map((t, i) => `${i}) ${t.c.title} — ${t.c.provider}`)
           .join('; ')}`,
@@ -662,21 +728,26 @@ Javob faqat JSON: {"ranking": [n, ...], "reason": "qisqa izoh"}`,
       const j = JSON.parse(
         raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
       );
+      const unsafe = new Set<number>(
+        (Array.isArray(j?.unsafe) ? j.unsafe : []).map(Number),
+      );
       const picked: ImageCandidate[] = (
         Array.isArray(j?.ranking) ? j.ranking : []
       )
-        .map((n: unknown) => ok[Number(n)]?.c)
+        .map(Number)
+        .filter((n: number) => !unsafe.has(n))
+        .map((n: number) => ok[n]?.c)
         .filter((c: ImageCandidate | undefined): c is ImageCandidate =>
           Boolean(c),
         );
       this.logger.log(
-        `Muqova tanlandi: ${picked[0]?.title ?? "yo'q"} (${ok.length} ta nomzoddan; ${String(j?.reason ?? '').slice(0, 120)})`,
+        `Muqova tanlandi: ${picked[0]?.title ?? "yo'q"} (${ok.length} ta nomzoddan, ${unsafe.size} tasi xavfli; ${String(j?.reason ?? '').slice(0, 120)})`,
       );
       // AI hech birini mos topmadi — muqovasiz qoldiramiz (admin o'zi qo'yadi)
       return picked;
     } catch (err: any) {
       this.logger.warn(`Rasmni AI tanlay olmadi: ${err?.message}`);
-      return candidates;
+      return trustedOnly();
     }
   }
 

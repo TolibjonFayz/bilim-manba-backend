@@ -18,6 +18,11 @@ export interface ImageCandidate {
   thumbUrl: string;
   /** imageUrl yuklanmasa — zaxira nusxalar */
   altUrls?: string[];
+  /**
+   * Tahririyat nazoratidagi baza (Pexels, NASA) — 18+ rasm ehtimoli juda past.
+   * AI rasmni ko'rib tekshira olmasa, faqat shulardan foydalaniladi.
+   */
+  trusted?: boolean;
   /** Rasm sahifasi (atributsiya havolasi) */
   pageUrl: string;
   title: string;
@@ -46,6 +51,25 @@ const stripHtml = (s: string) =>
     .replace(/&#0?39;/g, "'")
     .replace(/\s+/g, ' ')
     .trim();
+
+/**
+ * 18+ va shok mazmunli rasmlarni nomi, tavsifi, teglari yoki kategoriyasi
+ * bo'yicha chiqarib tashlash. Commons/Openverse'da san'at asarlari, tibbiy
+ * va tarixiy rasmlar orasida yalang'ochlik va zo'ravonlik uchraydi. Bu birinchi
+ * qavat — keyin Gemini rasmning o'zini ko'rib tekshiradi.
+ */
+const UNSAFE =
+  /\b(nudes?|nudity|naked|nakedness|topless|bare[- ]?breast\w*|breasts?|nipples?|erotic\w*|sex|sexual\w*|sexy|porn\w*|xxx|nsfw|lingerie|underwear|bikini|swimsuits?|genital\w*|penis|vagina|vulva|phall\w*|intercourse|orgy|fetish\w*|bdsm|bondage|strip(per|tease)|prostitut\w*|brothel|hentai|playboy|courtesan|odalisque|baigneuses?|bathers?|nu|nue|desnud[oa]s?|corpses?|cadavers?|autops\w*|gore|gory|behead\w*|decapitat\w*|mutilat\w*|lynch\w*|dismember\w*|suicide|cocaine|heroin)\b|обнаж|эрот|голая|голый|порн|секс|yalang'och|erotik|jinsiy/i;
+
+export function unsafeText(...parts: unknown[]): boolean {
+  return UNSAFE.test(
+    parts
+      .flat()
+      .map((x) => stripHtml(String(x ?? '')))
+      .join(' | ')
+      .replace(/[_-]+/g, ' '),
+  );
+}
 
 // NC (tijoriy emas) va ND (o'zgartirmaslik) litsenziyalari mos emas
 const FREE = /^(cc0|public domain|pd\b|pd-|cc by(-sa)? \d)/i;
@@ -103,7 +127,8 @@ async function commonsFiles(names: string[]): Promise<ImageCandidate[]> {
       prop: 'imageinfo',
       iiprop: 'url|size|mime|extmetadata',
       iiurlwidth: '1600',
-      iiextmetadatafilter: 'LicenseShortName|Artist',
+      iiextmetadatafilter:
+        'LicenseShortName|Artist|Categories|ImageDescription|ObjectName',
       titles: names.map((n) => `File:${n}`).join('|'),
     }),
   );
@@ -119,6 +144,16 @@ async function commonsFiles(names: string[]): Promise<ImageCandidate[]> {
     if (!FREE.test(license) || NOT_FREE.test(license)) continue;
     if (!/^image\/(jpeg|png|webp)$/.test(info.mime)) continue;
     if (!goodShape(info.width, info.height)) continue;
+    // Nomi, tavsifi yoki Commons kategoriyalarida 18+/shok belgisi bo'lsa — o'tkazamiz
+    if (
+      unsafeText(
+        p.title,
+        meta.Categories?.value,
+        meta.ImageDescription?.value,
+        meta.ObjectName?.value,
+      )
+    )
+      continue;
     out.push({
       imageUrl: wikimediaBig(info.url, info.width),
       thumbUrl: wikimediaSized(info.url, 500, info.width),
@@ -168,6 +203,12 @@ export async function openverseCandidates(
       (r: any) =>
         OV_LICENSE[r.license] &&
         goodShape(r.width, r.height) &&
+        // Manba "mature" deb belgilagan yoki nomi/teglarida 18+ belgisi bo'lsa — yo'q
+        !r.mature &&
+        !unsafeText(
+          r.title,
+          (r.tags ?? []).map((t: any) => t?.name),
+        ) &&
         // TIFF/SVG'ning Wikimedia nusxalari boshqa manzilda — JPG/PNG yetarli
         (!r.filetype || /^(jpe?g|png|webp)$/i.test(r.filetype)),
     )
@@ -208,6 +249,7 @@ export async function nasaCandidates(
       const d = it?.data?.[0];
       const thumb = it?.links?.[0]?.href as string | undefined;
       if (!d?.nasa_id || !thumb) return null;
+      if (unsafeText(d.title, d.description, d.keywords)) return null;
       const id = encodeURIComponent(d.nasa_id);
       return {
         // "~large" nusxa deyarli har doim bor; bo'lmasa yuklashda o'tib ketadi
@@ -222,6 +264,7 @@ export async function nasaCandidates(
         artist: d.center ? `NASA/${d.center}` : 'NASA',
         license: 'Public domain (NASA)',
         provider: 'NASA Image Library',
+        trusted: true,
       };
     })
     .filter((x): x is ImageCandidate => Boolean(x));
@@ -242,17 +285,20 @@ export async function pexelsCandidates(
     })}`,
     { Authorization: apiKey },
   );
-  return (j?.photos ?? []).map(
-    (p: any): ImageCandidate => ({
-      imageUrl: p.src?.large2x ?? p.src?.original,
-      thumbUrl: p.src?.medium ?? p.src?.small,
-      pageUrl: p.url,
-      title: stripHtml(p.alt).slice(0, 120) || query,
-      artist: p.photographer || 'Pexels',
-      license: 'Pexels License',
-      provider: 'Pexels',
-    }),
-  );
+  return (j?.photos ?? [])
+    .filter((p: any) => !unsafeText(p.alt))
+    .map(
+      (p: any): ImageCandidate => ({
+        imageUrl: p.src?.large2x ?? p.src?.original,
+        thumbUrl: p.src?.medium ?? p.src?.small,
+        pageUrl: p.url,
+        title: stripHtml(p.alt).slice(0, 120) || query,
+        artist: p.photographer || 'Pexels',
+        license: 'Pexels License',
+        provider: 'Pexels',
+        trusted: true,
+      }),
+    );
 }
 
 export async function downloadImage(url: string, maxBytes = 30_000_000) {
