@@ -91,6 +91,34 @@ export interface DraftJob {
   error?: string;
 }
 
+/**
+ * Zinapoyaning oxirgi bosqichi: aniq va yaqin rasm topilmasa — kategoriyaga
+ * mos, umumiy va xavfsiz (Pexels) fotolar. Kalit — kategoriya nomi kichik harfda.
+ */
+const CATEGORY_IMAGE_QUERIES: Record<string, string[]> = {
+  sport: ['sports stadium lights', 'athlete running track'],
+  'kompyuter fanlari': ['computer code on screen', 'circuit board technology'],
+  tarix: ['ancient ruins history', 'old historical architecture'],
+  "o'yinlar": ['video game controller', 'gaming setup neon'],
+  kino: ['cinema theater screen', 'film camera movie set'],
+  matematika: ['mathematics chalkboard equations', 'geometry shapes abstract'],
+  geografiya: ['mountain landscape aerial', 'world globe map'],
+  biologiya: ['green leaves macro nature', 'microscope laboratory biology'],
+  fizika: ['galaxy stars night sky', 'physics light experiment'],
+  fan: ['science laboratory', 'galaxy stars night sky'],
+  "san'at": ['paint brushes palette colors', 'art supplies colorful'],
+  umumiy: ['books library reading', 'open book warm light'],
+};
+const DEFAULT_IMAGE_QUERIES = ['books library reading', 'open book warm light'];
+
+const categoryQueries = (name?: string | null) =>
+  CATEGORY_IMAGE_QUERIES[
+    String(name ?? '')
+      .toLowerCase()
+      .replace(/[‘’ʻʼ`]/g, "'")
+      .trim()
+  ] ?? DEFAULT_IMAGE_QUERIES;
+
 /** "Manbalar" ro'yxatidagi muqova muallifi qatori */
 const coverCredit = (c: ImageCandidate) =>
   `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, ${escapeHtml(c.provider)}</li>`;
@@ -269,7 +297,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
 
   /** Bir marta bajariladi (app_settings belgisi) — qayta ishga tushganda takrorlanmaydi */
   async replaceCoverOnce(articleId: number) {
-    const key = `once_cover_${articleId}`;
+    // v2: zinapoyali qidiruv bilan qayta (v1 xavfsiz rasm topa olmagan edi)
+    const key = `once_cover_v2_${articleId}`;
     try {
       if (await this.getSetting(key)) return;
       await this.setSetting(key, new Date().toISOString());
@@ -492,7 +521,14 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       slug = `${slug}-${Date.now()}`;
     }
     // Muqova: erkin rasmlar orasidan AI tanlaydi (topilmasa — admin o'zi qo'yadi)
-    const cover = await this.coverFor(llm, sources, draft, title, slug);
+    const cover = await this.coverFor(
+      llm,
+      sources,
+      draft,
+      title,
+      slug,
+      category?.name,
+    );
 
     // AI ishlatgan manbalar; asosiy Wikipedia maqolasi doim ko'rsatiladi
     const used = sources.filter(
@@ -605,9 +641,12 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     } catch {
       // Wikipedia'da topilmasa — faqat qidiruv so'zlari bilan
     }
-    if (!sources.length && !imageQueries.length) {
-      return { coverImage: null, cover: null };
-    }
+    const category = article.categoryId
+      ? ((await this.categoryModel.findByPk(article.categoryId, {
+          attributes: ['name'],
+          raw: true,
+        })) as unknown as { name: string } | null)
+      : null;
 
     const cover = await this.coverFor(
       llm,
@@ -615,6 +654,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       { excerpt: article.excerpt, imageQueries },
       article.title,
       article.slug,
+      category?.name,
     );
     await this.articleModel.update(
       { coverImage: cover?.url ?? null },
@@ -661,55 +701,133 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     };
   }
 
+  /**
+   * Muqova — zinapoya bo'yicha, har bosqichda xavfsizlik tekshiruvi bilan:
+   *  1) aniq rasm: maqola mavzusi (manba maqolalar rasmlari + qidiruv so'zlari);
+   *  2) yaqin rasm: AI bergan kengroq mavzular (masalan, fir'avn → piramidalar);
+   *  3) kategoriya rasmi: kategoriyaga mos umumiy fotolar (Tarix → xarobalar).
+   * Shunda deyarli har doim xavfsiz va mavzuga yaqin rasm bo'ladi.
+   */
   private async coverFor(
     llm: Llm,
     sources: Source[],
     draft: DraftJson,
     title: string,
     slug: string,
+    categoryName?: string | null,
   ): Promise<{ url: string; cover: ImageCandidate } | null> {
-    try {
-      const candidates = await this.imageCandidates(sources, draft);
-      if (!candidates.length) return null;
-      const order = await this.rankImages(llm, candidates, title, draft);
-      for (const c of order) {
-        try {
-          let raw: Buffer | null = null;
-          for (const u of [c.imageUrl, ...(c.altUrls ?? [])]) {
-            raw = await downloadImage(u).catch(() => null);
-            if (raw) break;
-          }
-          if (!raw) throw new Error('hech bir nusxa yuklanmadi');
-          const img = sharp(raw, { failOn: 'none' }).rotate();
-          const meta = await img.metadata();
-          if ((meta.width ?? 0) < 900) continue;
-          const jpeg = await img
-            .resize({ width: 1600, withoutEnlargement: true })
-            .jpeg({ quality: 85, mozjpeg: true })
-            .toBuffer();
-          // Yakuniy qavat: aynan yuklanadigan rasm yana bir bor tekshiriladi
-          if (!(await this.imageIsSafe(llm, jpeg, c))) {
-            this.logger.warn(
-              `Muqova xavfsizlik tekshiruvidan o'tmadi: ${c.title}`,
-            );
-            continue;
-          }
-          const url = await this.cloudinary.uploadBuffer(
-            jpeg,
-            'bilim-manba/covers',
-            slug.slice(0, 120),
+    const tried = new Set<string>();
+    const stages: {
+      name: string;
+      candidates: () => Promise<ImageCandidate[]>;
+    }[] = [
+      { name: 'aniq', candidates: () => this.imageCandidates(sources, draft) },
+      {
+        name: 'yaqin',
+        candidates: async () =>
+          this.queryCandidates(
+            await this.broaderQueries(llm, title, draft.excerpt, categoryName),
+          ),
+      },
+      {
+        name: 'kategoriya',
+        candidates: () => this.queryCandidates(categoryQueries(categoryName)),
+      },
+    ];
+    for (const stage of stages) {
+      try {
+        const candidates = (await stage.candidates()).filter(
+          (c) => !tried.has(c.imageUrl),
+        );
+        candidates.forEach((c) => tried.add(c.imageUrl));
+        if (!candidates.length) continue;
+        const cover = await this.tryCandidates(
+          llm,
+          candidates,
+          title,
+          draft,
+          slug,
+        );
+        if (cover) {
+          this.logger.log(
+            `Muqova (${stage.name} bosqich): ${cover.cover.title}`,
           );
-          return { url, cover: c };
-        } catch (err: any) {
-          this.logger.warn(
-            `Muqova yuklanmadi (${c.imageUrl}): ${err?.message}`,
-          );
+          return cover;
         }
+      } catch (err: any) {
+        this.logger.warn(
+          `Muqova ${stage.name} bosqichida topilmadi (${slug}): ${err?.message}`,
+        );
       }
-      return null;
-    } catch (err: any) {
-      this.logger.warn(`Muqova topilmadi (${slug}): ${err?.message}`);
-      return null;
+    }
+    return null;
+  }
+
+  /** Nomzodlarni AI bilan tartiblab, birinchi xavfsiz va yuklanadiganini qo'yadi */
+  private async tryCandidates(
+    llm: Llm,
+    candidates: ImageCandidate[],
+    title: string,
+    draft: DraftJson,
+    slug: string,
+  ): Promise<{ url: string; cover: ImageCandidate } | null> {
+    const order = await this.rankImages(llm, candidates, title, draft);
+    for (const c of order) {
+      try {
+        let raw: Buffer | null = null;
+        for (const u of [c.imageUrl, ...(c.altUrls ?? [])]) {
+          raw = await downloadImage(u).catch(() => null);
+          if (raw) break;
+        }
+        if (!raw) throw new Error('hech bir nusxa yuklanmadi');
+        const img = sharp(raw, { failOn: 'none' }).rotate();
+        const meta = await img.metadata();
+        if ((meta.width ?? 0) < 900) continue;
+        const jpeg = await img
+          .resize({ width: 1600, withoutEnlargement: true })
+          .jpeg({ quality: 85, mozjpeg: true })
+          .toBuffer();
+        // Yakuniy qavat: aynan yuklanadigan rasm yana bir bor tekshiriladi
+        if (!(await this.imageIsSafe(llm, jpeg, c))) {
+          this.logger.warn(
+            `Muqova xavfsizlik tekshiruvidan o'tmadi: ${c.title}`,
+          );
+          continue;
+        }
+        const url = await this.cloudinary.uploadBuffer(
+          jpeg,
+          'bilim-manba/covers',
+          slug.slice(0, 120),
+        );
+        return { url, cover: c };
+      } catch (err: any) {
+        this.logger.warn(`Muqova yuklanmadi (${c.imageUrl}): ${err?.message}`);
+      }
+    }
+    return null;
+  }
+
+  /** Aniq rasm topilmasa: mavzuga yaqin, kengroq va ko'rinadigan narsalar */
+  private async broaderQueries(
+    llm: Llm,
+    title: string,
+    excerpt?: string | null,
+    categoryName?: string | null,
+  ): Promise<string[]> {
+    try {
+      const raw = await llm.json(
+        `Maqola uchun muqova rasmi qidiryapmiz, lekin aniq mavzuga oid rasm topilmadi. KENGROQ, mavzuga yaqin va fotoda ko'rinadigan 3 ta INGLIZCHA qidiruv so'zi ber: davr, joy, muhit, kayfiyat yoki tegishli obyektlar (masalan, qadimgi Misr fir'avni → "egyptian pyramids desert", "hieroglyphs carved stone"; futbolchi → "football stadium night"). Odamlarning tanasiga urg'u beradigan so'zlar bo'lmasin. Javob faqat JSON: {"queries": ["..."]}`,
+        `Sarlavha: ${title}\nTavsif: ${excerpt ?? ''}\nKategoriya: ${categoryName ?? ''}`,
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      return (Array.isArray(j?.queries) ? j.queries : [])
+        .map((q: unknown) => String(q ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    } catch {
+      return [];
     }
   }
 
@@ -758,6 +876,7 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
     }
   }
 
+  /** 1-bosqich: manba maqolalarining rasmlari + mavzu bo'yicha qidiruv */
   private async imageCandidates(
     sources: Source[],
     draft: DraftJson,
@@ -769,42 +888,58 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
     const queries = [
       ...(draft.imageQueries ?? []).map((q) => String(q ?? '').trim()),
       wiki[0]?.title.replace(/\s*\(.*?\)\s*/g, ' ').trim() ?? '',
-    ]
+    ];
+    const [byQuery, fromPages] = await Promise.all([
+      this.queryCandidates(queries),
+      wiki.length
+        ? commonsCandidates(
+            wiki[0].lang,
+            wiki.map((w) => w.title),
+          ).catch(() => [])
+        : Promise.resolve([] as ImageCandidate[]),
+    ]);
+    // Pexels birinchi (queryCandidates tartibi), keyin manba maqolalarining rasmlari
+    const pexels = byQuery.filter((c) => c.provider === 'Pexels');
+    const rest = byQuery.filter((c) => c.provider !== 'Pexels');
+    return this.dedupe([...pexels, ...fromPages, ...rest]).slice(0, 16);
+  }
+
+  /** Qidiruv so'zlari bo'yicha: Pexels (kaliti bo'lsa) → Openverse → NASA */
+  private async queryCandidates(
+    rawQueries: string[],
+  ): Promise<ImageCandidate[]> {
+    const queries = rawQueries
+      .map((q) => String(q ?? '').trim())
       .filter(Boolean)
       .filter(
         (q, i, all) =>
           all.findIndex((x) => x.toLowerCase() === q.toLowerCase()) === i,
       )
       .slice(0, 3);
+    if (!queries.length) return [];
     const pexelsKey = this.config.get<string>('PEXELS_API_KEY');
-    // Pexels birinchi: professional, chiroyli fotolar (kaliti bo'lsa)
     const settled = await Promise.allSettled([
       ...(pexelsKey
         ? queries
             .slice(0, 2)
             .map((q, i) => pexelsCandidates(q, pexelsKey, i ? 3 : 6))
         : []),
-      ...(wiki.length
-        ? [
-            commonsCandidates(
-              wiki[0].lang,
-              wiki.map((w) => w.title),
-            ),
-          ]
-        : []),
       ...queries.map((q) => openverseCandidates(q, 3)),
-      ...(queries[0] ? [nasaCandidates(queries[0], 2)] : []),
+      nasaCandidates(queries[0], 2),
     ]);
+    return this.dedupe(
+      settled.flatMap((r) => (r.status === 'fulfilled' ? r.value : [])),
+    ).slice(0, 16);
+  }
+
+  private dedupe(list: ImageCandidate[]) {
     const seen = new Set<string>();
-    return settled
-      .flatMap((r) => (r.status === 'fulfilled' ? r.value : []))
-      .filter((c) => {
-        const key = c.imageUrl.split('?')[0];
-        if (seen.has(key)) return false;
-        seen.add(key);
-        return true;
-      })
-      .slice(0, 16);
+    return list.filter((c) => {
+      const key = c.imageUrl.split('?')[0];
+      if (seen.has(key)) return false;
+      seen.add(key);
+      return true;
+    });
   }
 
   /**
@@ -848,7 +983,7 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
 AVVAL XAVFSIZLIK: sayt o'quvchilari orasida bolalar va o'smirlar bor. Quyidagilardan birortasi bo'lgan rasmlarni "unsafe" ro'yxatiga yoz va hech qachon tanlama: har qanday yalang'ochlik (san'at asari, haykal, tarixiy yoki tibbiy rasm bo'lsa ham); ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar; jinsiy mazmun yoki ishora; qon, jarohat, murda, zo'ravonlik, qatl; giyohvand moddalar. Shubha bo'lsa ham — unsafe.
 Keyin qolganlaridan tanla. Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa).
 Pexels rasmlari professional fotograflarning ishlari — mavzuga mos bo'lsa, ularni birinchi navbatda tanla; Pexels'da mosi bo'lmasa, boshqalaridan tanla.
-Eng yaxshisidan boshlab eng ko'pi 4 ta mos rasm raqamini qaytar. Hech biri mos bo'lmasa — bo'sh ro'yxat.
+Eng yaxshisidan boshlab eng ko'pi 4 ta rasm raqamini qaytar. Aniq mos rasm bo'lmasa ham, mavzuga eng yaqin yoki uning kayfiyatini beradigan xavfsiz rasmlarni tartib bilan ber. Faqat hammasi xavfli yoki mavzuga mutlaqo aloqasiz bo'lsa — bo'sh ro'yxat.
 Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izoh"}`,
         `Maqola sarlavhasi: ${title}\nTavsif: ${draft.excerpt ?? ''}\n\nRasmlar: ${ok
           .map((t, i) => `${i}) ${t.c.title} — ${t.c.provider}`)
