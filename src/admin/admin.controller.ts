@@ -136,6 +136,12 @@ export class AdminController {
     return { job: this.drafts.getJob() };
   }
 
+  // Muqovani xavfsiz tizim bilan qayta tanlash (AI)
+  @Post('articles/:id/cover/regenerate')
+  regenerateCover(@Param('id') id: string) {
+    return this.drafts.regenerateCover(+id);
+  }
+
   // Kunlik AI qoralama sozlamalari va mavzular navbati
   @Get('drafts/settings')
   draftSettings() {

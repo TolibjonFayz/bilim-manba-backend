@@ -91,6 +91,10 @@ export interface DraftJob {
   error?: string;
 }
 
+/** "Manbalar" ro'yxatidagi muqova muallifi qatori */
+const coverCredit = (c: ImageCandidate) =>
+  `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, ${escapeHtml(c.provider)}</li>`;
+
 const plainLength = (html?: string) =>
   String(html ?? '')
     .replace(/<[^>]+>/g, ' ')
@@ -258,6 +262,26 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     // Deploy/uyg'onishdan keyin bugungi qoralama yozilmagan bo'lsa — yoziladi
     this.schedule(60 * 1000);
+    // 2026-10-14: 92-qoralamaga 18+ muqova tushgan edi (xavfsizlik filtrlaridan
+    // oldin) — deploy'dan keyin bir marta olib tashlanib, yangisi tanlanadi
+    setTimeout(() => void this.replaceCoverOnce(92), 90 * 1000).unref();
+  }
+
+  /** Bir marta bajariladi (app_settings belgisi) — qayta ishga tushganda takrorlanmaydi */
+  async replaceCoverOnce(articleId: number) {
+    const key = `once_cover_${articleId}`;
+    try {
+      if (await this.getSetting(key)) return;
+      await this.setSetting(key, new Date().toISOString());
+      const res = await this.regenerateCover(articleId);
+      this.logger.log(
+        `${articleId}-maqola muqovasi almashtirildi: ${res.coverImage ?? 'muqovasiz qoldi'}`,
+      );
+    } catch (err: any) {
+      this.logger.error(
+        `${articleId}-maqola muqovasi almashtirilmadi: ${err?.message}`,
+      );
+    }
   }
 
   onModuleDestroy() {
@@ -484,9 +508,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     );
     if (cover) {
       const c = cover.cover;
-      items.push(
-        `<li>Muqova rasmi: <a href="${escapeHtml(c.pageUrl)}" target="_blank" rel="noopener">${escapeHtml(c.title)}</a> — ${escapeHtml(c.artist)}, ${escapeHtml(c.license)}, ${escapeHtml(c.provider)}</li>`,
-      );
+      items.push(coverCredit(c));
     }
     const content = `${html}
 <h2>Manbalar</h2>
@@ -535,6 +557,110 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
    * ko'rib eng mos va chiroylisini tanlaydi. Tanlangan rasm 1600px gacha
    * kichraytirilib Cloudinary'ga yuklanadi.
    */
+  /**
+   * Mavjud maqolaning muqovasini xavfsiz tizim bilan qayta tanlaydi: eski rasm
+   * darhol olib tashlanadi, yangisi topilsa qo'yiladi (Cloudinary'da o'sha
+   * nom bilan — eski fayl ustidan yoziladi), "Manbalar"dagi muallif qatori
+   * yangilanadi.
+   */
+  async regenerateCover(articleId: number) {
+    const llm = this.getLlm();
+    if (!llm) {
+      throw new ServiceUnavailableException(
+        'AI kaliti sozlanmagan (GEMINI_API_KEY yoki GROQ_API_KEY)',
+      );
+    }
+    const article = (await this.articleModel.findByPk(articleId, {
+      raw: true,
+    })) as any;
+    if (!article) throw new BadRequestException('Maqola topilmadi');
+
+    // Avval eski rasmni olib qo'yamiz — yangisi topilmasa ham eskisi qolmasin
+    await this.articleModel.update(
+      { coverImage: null },
+      { where: { id: articleId } },
+    );
+
+    // Rasm qidirish uchun inglizcha so'zlar va (topilsa) Wikipedia manbasi
+    let imageQueries: string[] = [];
+    try {
+      const raw = await llm.json(
+        `Maqola uchun muqova rasmi qidiramiz. Sarlavha va tavsifga qarab 2–3 ta INGLIZCHA qidiruv so'zi ber — aniq, ko'rinadigan obyekt, mavhum so'zlar emas. Javob faqat JSON: {"imageQueries": ["..."]}`,
+        `Sarlavha: ${article.title}\nTavsif: ${article.excerpt ?? ''}\nTeglar: ${article.tags ?? ''}`,
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      imageQueries = (Array.isArray(j?.imageQueries) ? j.imageQueries : [])
+        .map((q: unknown) => String(q ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 3);
+    } catch {
+      // so'zlarsiz ham Wikipedia manbasi orqali qidiriladi
+    }
+    const sources: Source[] = [];
+    try {
+      const w = await this.findTopic(article.title, 500, llm);
+      sources.push({ kind: 'wikipedia', ...w });
+    } catch {
+      // Wikipedia'da topilmasa — faqat qidiruv so'zlari bilan
+    }
+    if (!sources.length && !imageQueries.length) {
+      return { coverImage: null, cover: null };
+    }
+
+    const cover = await this.coverFor(
+      llm,
+      sources,
+      { excerpt: article.excerpt, imageQueries },
+      article.title,
+      article.slug,
+    );
+    await this.articleModel.update(
+      { coverImage: cover?.url ?? null },
+      { where: { id: articleId } },
+    );
+
+    // "Manbalar"dagi muqova qatorini yangilaymiz (eski muallif/havola qolmasin)
+    if (article.content) {
+      try {
+        const res = await fetch(article.content, {
+          signal: AbortSignal.timeout(15000),
+        });
+        const html = String(((await res.json()) as any)?.message ?? '');
+        const withoutOld = html.replace(/<li>Muqova rasmi:[\s\S]*?<\/li>/g, '');
+        const updated = cover
+          ? withoutOld.includes('<h2>Manbalar</h2>')
+            ? withoutOld.replace(
+                /(<h2>Manbalar<\/h2>\s*<ul>[\s\S]*?)(<\/ul>)/,
+                `$1${coverCredit(cover.cover)}$2`,
+              )
+            : withoutOld
+          : withoutOld;
+        if (updated !== html) {
+          const url = await this.cloudflare.uploadJson(
+            { message: updated },
+            `${article.slug}-${Date.now()}.json`,
+          );
+          await this.articleModel.update(
+            { content: url },
+            { where: { id: articleId } },
+          );
+        }
+      } catch (err: any) {
+        this.logger.warn(
+          `Manbalar yangilanmadi (${article.slug}): ${err?.message}`,
+        );
+      }
+    }
+    return {
+      coverImage: cover?.url ?? null,
+      cover: cover
+        ? { title: cover.cover.title, provider: cover.cover.provider }
+        : null,
+    };
+  }
+
   private async coverFor(
     llm: Llm,
     sources: Source[],
@@ -642,7 +768,7 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
     );
     const queries = [
       ...(draft.imageQueries ?? []).map((q) => String(q ?? '').trim()),
-      wiki[0].title.replace(/\s*\(.*?\)\s*/g, ' ').trim(),
+      wiki[0]?.title.replace(/\s*\(.*?\)\s*/g, ' ').trim() ?? '',
     ]
       .filter(Boolean)
       .filter(
@@ -658,12 +784,16 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
             .slice(0, 2)
             .map((q, i) => pexelsCandidates(q, pexelsKey, i ? 3 : 6))
         : []),
-      commonsCandidates(
-        wiki[0].lang,
-        wiki.map((w) => w.title),
-      ),
+      ...(wiki.length
+        ? [
+            commonsCandidates(
+              wiki[0].lang,
+              wiki.map((w) => w.title),
+            ),
+          ]
+        : []),
       ...queries.map((q) => openverseCandidates(q, 3)),
-      nasaCandidates(queries[0], 2),
+      ...(queries[0] ? [nasaCandidates(queries[0], 2)] : []),
     ]);
     const seen = new Set<string>();
     return settled
