@@ -45,38 +45,98 @@ class GeminiHttpError extends Error {
   }
 }
 
+/**
+ * ListModels javobidan matn yozadigan flash modellar: eng yangi versiya
+ * birinchi, barqaror (preview emas) va to'liq (lite emas) modellar oldinda.
+ */
+export function flashModels(list: any[]): string[] {
+  const version = (id: string) =>
+    Number(/gemini-(\d+(?:\.\d+)?)/.exec(id)?.[1] ?? 0);
+  return list
+    .filter((m) =>
+      (m?.supportedGenerationMethods ?? []).includes('generateContent'),
+    )
+    .map((m) => String(m.name ?? '').replace(/^models\//, ''))
+    .filter(
+      (id) =>
+        /^gemini-\d+(\.\d+)?-flash/.test(id) &&
+        !/image|tts|audio|live|thinking|embed|exp/.test(id),
+    )
+    .sort(
+      (a, b) =>
+        Number(/preview/.test(a)) - Number(/preview/.test(b)) ||
+        version(b) - version(a) ||
+        Number(/lite/.test(a)) - Number(/lite/.test(b)) ||
+        a.length - b.length,
+    );
+}
+
 export function createLlm(cfg: LlmConfig): Llm | null {
   if (cfg.geminiKey) {
     const model = cfg.geminiModel || 'gemini-flash-latest';
     const models = [
       model,
-      ...(cfg.geminiFallbacks ?? 'gemini-2.5-flash,gemini-flash-lite-latest')
+      ...(cfg.geminiFallbacks ?? 'gemini-flash-lite-latest')
         .split(',')
         .map((m) => m.trim())
         .filter((m) => m && m !== model),
     ];
+    // Google eski modellarni o'chirib qo'yadi (404) — bunday model jarayon
+    // davomida qayta chaqirilmaydi, o'rniga API ro'yxatidan yangi flash topiladi
+    const gone = new Set<string>();
+    let discovered: string[] | null = null;
+    const discover = async (): Promise<string[]> => {
+      if (discovered) return discovered;
+      try {
+        const res = await fetch(`${GEMINI}?pageSize=1000`, {
+          headers: { 'x-goog-api-key': cfg.geminiKey! },
+          signal: AbortSignal.timeout(15000),
+        });
+        const j: any = await res.json().catch(() => ({}));
+        discovered = flashModels(j?.models ?? []);
+      } catch {
+        return [];
+      }
+      return discovered;
+    };
     const call = async (
       system: string,
       parts: any[],
       maxOutputTokens: number,
     ) => {
       let last: unknown;
-      for (const m of models) {
-        for (const delay of RETRY_DELAYS_MS) {
-          if (delay) await sleep(delay);
-          try {
-            return await callModel(m, system, parts, maxOutputTokens);
-          } catch (err: any) {
-            last = err;
-            const retryable =
-              err instanceof GeminiHttpError
-                ? RETRYABLE.has(err.status)
-                : err?.name === 'TimeoutError' ||
-                  /fetch failed/i.test(String(err?.message));
-            if (!retryable) throw err;
+      const tryModels = async (list: string[]) => {
+        for (const m of list) {
+          if (gone.has(m)) continue;
+          for (const delay of RETRY_DELAYS_MS) {
+            if (delay) await sleep(delay);
+            try {
+              return {
+                text: await callModel(m, system, parts, maxOutputTokens),
+              };
+            } catch (err: any) {
+              if (err instanceof GeminiHttpError && err.status === 404) {
+                gone.add(m);
+                // 404 dan oldingi xato (masalan 503) foydaliroq — uni saqlaymiz
+                last ??= err;
+                break;
+              }
+              last = err;
+              const retryable =
+                err instanceof GeminiHttpError
+                  ? RETRYABLE.has(err.status)
+                  : err?.name === 'TimeoutError' ||
+                    /fetch failed/i.test(String(err?.message));
+              if (!retryable) throw err;
+            }
           }
         }
-      }
+        return null;
+      };
+      const extra = async () =>
+        (await discover()).filter((m) => !models.includes(m)).slice(0, 2);
+      const hit = (await tryModels(models)) ?? (await tryModels(await extra()));
+      if (hit) return hit.text;
       throw last;
     };
     const callModel = async (
