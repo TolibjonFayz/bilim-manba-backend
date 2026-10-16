@@ -1,0 +1,30 @@
+~version: "2.1"
+
+# Bilim Manba — Telegram Instant View shabloni (bilimmanba.uz maqola sahifalari).
+#
+# Qanday ulanadi:
+#  1. https://instantview.telegram.org/my/ ga Telegram akkaunt bilan kiring.
+#  2. Manzil qatoriga bitta maqola manzilini yozing, masalan
+#     https://bilimmanba.uz/articles/aleksandr-makkuin-podyumni-teatrga-aylantirgan-daho
+#     va "Create template" ni bosing.
+#  3. Chap tomondagi oynadagi hamma narsani o'chirib, shu fayldagi qoidalarni
+#     (shu qatordan pastdagilarni) qo'ying — o'ng tomonda maqola Telegram
+#     ko'rinishida chiqishi kerak.
+#  4. Ko'rinish to'g'ri bo'lsa, o'ng tomondagi "View in Telegram" havolasidan
+#     rhash=... qiymatini oling va Render → Environment ga
+#     TELEGRAM_IV_RHASH=<shu qiymat> qilib qo'shing.
+#  5. Shundan keyin kanaldagi "📖 Maqolani o'qish" tugmasi maqolani Telegram
+#     ichida (Instant View) ochadi. RHASH o'chirilsa — oddiy sayt havolasi.
+
+# Faqat maqola sahifalari
+?path: /articles/.+
+
+title:     //h1[has-class("article-header__title")]
+subtitle:  //p[has-class("article-header__excerpt")]
+cover:     //img[has-class("article-cover__img")]
+author:    "Bilim Manba"
+author_url: "https://bilimmanba.uz"
+site_name: "Bilim Manba"
+
+# Matn (bo'limlar, ro'yxatlar, iqtiboslar va "Manbalar")
+body:      //div[has-class("article-content")]

@@ -9,6 +9,7 @@ import { PublishingService } from './publishing.service';
 import { TelegramService } from './telegram.service';
 import { InstagramService } from './instagram.service';
 import { SocialImageService } from './social-image.service';
+import { AdminAlertService } from './admin-alert.service';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
@@ -24,7 +25,13 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     TelegramService,
     InstagramService,
     SocialImageService,
+    AdminAlertService,
   ],
-  exports: [PublishingService, TelegramService, InstagramService],
+  exports: [
+    PublishingService,
+    TelegramService,
+    InstagramService,
+    AdminAlertService,
+  ],
 })
 export class PublishingModule {}

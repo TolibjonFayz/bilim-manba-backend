@@ -21,6 +21,7 @@ import { AdminService } from './admin.service';
 import { DraftsService } from '../drafts/drafts.service';
 import { Period, StatsService } from '../stats/stats.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
+import { AdminAlertService } from '../publishing/admin-alert.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -34,6 +35,7 @@ export class AdminController {
     private drafts: DraftsService,
     private stats: StatsService,
     private searchConsole: SearchConsoleService,
+    private alerts: AdminAlertService,
   ) {}
 
   // Dashboard statistika
@@ -140,6 +142,36 @@ export class AdminController {
   @Post('articles/:id/cover/regenerate')
   regenerateCover(@Param('id') id: string) {
     return this.drafts.regenerateCover(+id);
+  }
+
+  // Adminga shaxsiy Telegram xabarlari: holat, ulash, tekshirish, sinov, uzish
+  @Get('alerts/telegram')
+  alertsStatus() {
+    return this.alerts.status();
+  }
+
+  @Post('alerts/telegram/link')
+  alertsLink() {
+    return this.alerts.createLink();
+  }
+
+  @Post('alerts/telegram/check')
+  alertsCheck() {
+    return this.alerts.checkLink();
+  }
+
+  @Post('alerts/telegram/test')
+  async alertsTest() {
+    return {
+      sent: await this.alerts.send(
+        '🔔 <b>Sinov xabari</b>\n\nBilim Manba admin xabarlari ishlayapti.',
+      ),
+    };
+  }
+
+  @Delete('alerts/telegram')
+  alertsUnlink() {
+    return this.alerts.unlink();
   }
 
   // Kunlik AI qoralama sozlamalari va mavzular navbati

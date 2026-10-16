@@ -16,13 +16,15 @@ import { TelegramService } from './telegram.service';
 import { InstagramService } from './instagram.service';
 import { SocialImageService } from './social-image.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { AdminAlertService } from './admin-alert.service';
 
 /**
  * Model nusxasini oddiy obyektga aylantiradi. Article/Category modellarida
  * `category` kabi maydonlar class field qilib e'lon qilingan va Sequelize
  * getter'larini to'sadi — nusxada `article.category` undefined bo'lib qoladi.
  */
-const plain = (a: any) => (typeof a?.get === 'function' ? a.get({ plain: true }) : a);
+const plain = (a: any) =>
+  typeof a?.get === 'function' ? a.get({ plain: true }) : a;
 
 // Timer ko'pi bilan shuncha kutadi, keyin bazani qayta tekshiradi
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
@@ -53,6 +55,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     private readonly instagram: InstagramService,
     private readonly socialImages: SocialImageService,
     private readonly cloudinary: CloudinaryService,
+    private readonly alerts: AdminAlertService,
   ) {}
 
   onModuleInit() {
@@ -109,8 +112,10 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
         order: [['scheduledAt', 'ASC']],
       });
       for (const a of due) {
-        await this.publish(a.id);
+        const results = await this.publishWithResults(a.id);
         this.logger.log(`Rejalashtirilgan maqola chop etildi: ${a.slug}`);
+        // Rejali nashr admin ko'rmaganda bo'ladi — shaxsiy xabar
+        await this.alerts.published(a, results);
       }
       return due.length;
     } finally {
@@ -123,9 +128,15 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
    * oldin yaratilgan bo'lishi mumkin, saytda esa nashr sanasi ko'rinishi kerak).
    */
   async publish(id: number) {
+    await this.publishWithResults(id);
+    return this.articleModel.findByPk(id);
+  }
+
+  private async publishWithResults(id: number) {
     const article = await this.articleModel.findByPk(id);
     if (!article) throw new NotFoundException('Maqola topilmadi');
-    if (article.status === ArticleStatus.PUBLISHED) return article;
+    if (article.status === ArticleStatus.PUBLISHED)
+      return { telegram: null, instagram: null };
 
     await this.articleModel.update(
       { status: ArticleStatus.PUBLISHED, scheduledAt: null },
@@ -135,22 +146,31 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
       'UPDATE articles SET "createdAt" = NOW() WHERE id = :id',
       { replacements: { id } },
     );
-    await this.afterPublish(id);
-    return this.articleModel.findByPk(id);
+    return this.afterPublish(id);
   }
 
   /**
    * Chop etilgandan keyingi ishlar. Har biri alohida — biri yiqilsa (masalan
    * email), qolganlari baribir bajariladi, nashrning o'zi bekor bo'lmaydi.
    */
-  async afterPublish(id: number) {
+  async afterPublish(
+    id: number,
+  ): Promise<{ telegram: boolean | null; instagram: boolean | null }> {
     const article = await this.articleModel.findByPk(id, {
       include: [{ model: Category, attributes: ['id', 'name'] }],
     });
-    if (!article || article.status !== ArticleStatus.PUBLISHED) return;
+    if (!article || article.status !== ArticleStatus.PUBLISHED)
+      return { telegram: null, instagram: null };
 
-    await this.postToTelegram(article);
-    await this.postToInstagram(article);
+    // null — ulanmagan, false — yuborilmadi (xato loglarda)
+    const telegram = this.telegram.configured
+      ? (await this.postToTelegram(article)) ||
+        Boolean(article.telegramPostedAt)
+      : null;
+    const insta = await this.postToInstagram(article);
+    const instagram = this.instagram.configured
+      ? insta.post || Boolean(article.instagramPostedAt)
+      : null;
 
     try {
       await this.notifications.createForAllUsers(
@@ -178,6 +198,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     } catch (err: any) {
       this.logger.error(`Email obunachilarga yuborilmadi: ${err?.message}`);
     }
+    return { telegram, instagram };
   }
 
   /**

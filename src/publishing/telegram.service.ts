@@ -52,6 +52,19 @@ export class TelegramService {
     return `${this.siteUrl}/articles/${slug}?utm_source=telegram&utm_medium=channel`;
   }
 
+  /**
+   * Kanaldagi "O'qish" tugmasi. TELEGRAM_IV_RHASH bo'lsa — Instant View:
+   * maqola Telegram ichida bir zumda ochiladi (shablon instantview.telegram.org
+   * da yaratiladi, rhash o'sha yerdan olinadi; shablon: docs/instant-view.txt).
+   */
+  readUrl(slug: string) {
+    const url = this.articleUrl(slug);
+    const rhash = this.config.get<string>('TELEGRAM_IV_RHASH')?.trim();
+    return rhash
+      ? `https://t.me/iv?url=${encodeURIComponent(url)}&rhash=${encodeURIComponent(rhash)}`
+      : url;
+  }
+
   buildCaption(a: TelegramArticle): string {
     const esc = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -97,7 +110,12 @@ export class TelegramService {
       : url;
   }
 
-  private async call(method: string, body: Record<string, unknown>) {
+  /** Bot tokeni bor-yo'qligi (kanalsiz ham admin xabarlari uchun yetadi) */
+  get hasBot(): boolean {
+    return Boolean(this.token);
+  }
+
+  async call(method: string, body: Record<string, unknown>) {
     const res = await fetch(
       `https://api.telegram.org/bot${this.token}/${method}`,
       {
@@ -125,7 +143,7 @@ export class TelegramService {
     const caption = this.buildCaption(a);
     const reply_markup = {
       inline_keyboard: [
-        [{ text: "📖 Maqolani o'qish", url: this.articleUrl(a.slug) }],
+        [{ text: "📖 Maqolani o'qish", url: this.readUrl(a.slug) }],
       ],
     };
     const photo = this.coverUrl(a.coverImage);

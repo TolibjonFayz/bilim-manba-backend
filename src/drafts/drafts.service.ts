@@ -36,6 +36,7 @@ import {
   pexelsCandidates,
 } from './images';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
+import { AdminAlertService } from '../publishing/admin-alert.service';
 
 // AI qoralamalarini shu belgi bilan taniymiz (manbalar maqola oxirida)
 export const AI_SOURCE = 'Bilim Manba AI';
@@ -225,6 +226,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     @InjectConnection() private readonly sequelize: Sequelize,
     private readonly cloudflare: CloudflareService,
     private readonly cloudinary: CloudinaryService,
+    private readonly alerts: AdminAlertService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -269,6 +271,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
           title: a.title,
           finishedAt: new Date().toISOString(),
         });
+        // Yozish 5–10 daqiqa oladi — admin oynani yopgan bo'lishi mumkin
+        void this.alerts.draftReady(a, false);
       })
       .catch((err: any) => {
         Object.assign(job, {
@@ -276,6 +280,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
           error: String(err?.message ?? 'Xato'),
           finishedAt: new Date().toISOString(),
         });
+        void this.alerts.draftFailed(job.error!, job.topic);
       });
     return job;
   }
@@ -1365,9 +1370,10 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       // Bugungi urinish belgilanadi — xato bo'lsa ham kuniga bir marta
       await this.setSetting('ai_last_run', today);
       if ((await this.pendingCount()) >= MAX_PENDING) {
-        await this.setSetting(
-          'ai_last_error',
-          `Ko'rib chiqilmagan ${MAX_PENDING} ta AI qoralama bor — yangisi yozilmadi`,
+        const msg = `Ko'rib chiqilmagan ${MAX_PENDING} ta AI qoralama bor — yangisi yozilmadi`;
+        await this.setSetting('ai_last_error', msg);
+        await this.alerts.draftSkipped(
+          `${msg}. Ulardan birini chop eting yoki o'chiring — ertaga yana yoziladi.`,
         );
         return 'skipped';
       }
@@ -1375,7 +1381,8 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       const topics = await this.getTopics();
       const topic = topics[0];
       try {
-        await this.generate({ topic });
+        const article = await this.generate({ topic });
+        await this.alerts.draftReady(article, true);
         if (topic)
           await this.setSetting('ai_topics', JSON.stringify(topics.slice(1)));
         await this.setSetting('ai_last_error', '');
@@ -1384,6 +1391,11 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
         await this.setSetting(
           'ai_last_error',
           `${today}: ${topic ? `"${topic}" — ` : ''}${err?.message ?? 'xato'}`,
+        );
+        await this.alerts.draftFailed(
+          String(err?.message ?? 'xato'),
+          topic,
+          true,
         );
         // Topilmagan mavzu navbatni to'sib qo'ymasin
         if (topic && err instanceof BadRequestException) {
