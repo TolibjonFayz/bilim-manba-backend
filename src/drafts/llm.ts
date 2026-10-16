@@ -1,3 +1,4 @@
+import { Logger } from '@nestjs/common';
 import Groq from 'groq-sdk';
 
 /**
@@ -35,6 +36,11 @@ const GEMINI = 'https://generativelanguage.googleapis.com/v1beta/models';
 const RETRY_DELAYS_MS = [0, 5000, 15000];
 const RETRYABLE = new Set([429, 500, 503, 504]);
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+// Matn yozish uzoq davom etadi; rasm tanlash/tekshiruv qisqa — osilib qolgan
+// so'rovni uzoq kutmasdan keyingi modelga o'tamiz
+const WRITE_TIMEOUT_MS = 170000;
+const VISION_TIMEOUT_MS = 75000;
+const logger = new Logger('Gemini');
 
 class GeminiHttpError extends Error {
   constructor(
@@ -103,6 +109,7 @@ export function createLlm(cfg: LlmConfig): Llm | null {
       system: string,
       parts: any[],
       maxOutputTokens: number,
+      timeoutMs: number,
     ) => {
       let last: unknown;
       const tryModels = async (list: string[]) => {
@@ -112,9 +119,16 @@ export function createLlm(cfg: LlmConfig): Llm | null {
             if (delay) await sleep(delay);
             try {
               return {
-                text: await callModel(m, system, parts, maxOutputTokens),
+                text: await callModel(
+                  m,
+                  system,
+                  parts,
+                  maxOutputTokens,
+                  timeoutMs,
+                ),
               };
             } catch (err: any) {
+              logger.warn(`${m}: ${String(err?.message).slice(0, 160)}`);
               if (err instanceof GeminiHttpError && err.status === 404) {
                 gone.add(m);
                 // 404 dan oldingi xato (masalan 503) foydaliroq — uni saqlaymiz
@@ -122,6 +136,8 @@ export function createLlm(cfg: LlmConfig): Llm | null {
                 break;
               }
               last = err;
+              // Javob bermay qolgan model — qayta kutmasdan keyingisiga
+              if (err?.name === 'TimeoutError') break;
               const retryable =
                 err instanceof GeminiHttpError
                   ? RETRYABLE.has(err.status)
@@ -144,6 +160,7 @@ export function createLlm(cfg: LlmConfig): Llm | null {
       system: string,
       parts: any[],
       maxOutputTokens: number,
+      timeoutMs: number,
     ) => {
       const res = await fetch(
         `${GEMINI}/${encodeURIComponent(model)}:generateContent`,
@@ -162,7 +179,7 @@ export function createLlm(cfg: LlmConfig): Llm | null {
               maxOutputTokens,
             },
           }),
-          signal: AbortSignal.timeout(170000),
+          signal: AbortSignal.timeout(timeoutMs),
         },
       );
       const j: any = await res.json().catch(() => ({}));
@@ -187,7 +204,8 @@ export function createLlm(cfg: LlmConfig): Llm | null {
     return {
       name: `gemini:${model}`,
       sourceBudget: 30000,
-      json: (system, user) => call(system, [{ text: user }], 32000),
+      json: (system, user) =>
+        call(system, [{ text: user }], 32000, WRITE_TIMEOUT_MS),
       vision: (system, user, images) =>
         call(
           system,
@@ -198,6 +216,7 @@ export function createLlm(cfg: LlmConfig): Llm | null {
             })),
           ],
           4000,
+          VISION_TIMEOUT_MS,
         ),
     };
   }
