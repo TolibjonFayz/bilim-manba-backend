@@ -59,7 +59,7 @@ const stripHtml = (s: string) =>
  * qavat — keyin Gemini rasmning o'zini ko'rib tekshiradi.
  */
 const UNSAFE =
-  /\b(nudes?|nudity|naked|nakedness|topless|bare[- ]?breast\w*|breasts?|nipples?|erotic\w*|sex|sexual\w*|sexy|porn\w*|xxx|nsfw|lingerie|underwear|bikini|swimsuits?|genital\w*|penis|vagina|vulva|phall\w*|intercourse|orgy|fetish\w*|bdsm|bondage|strip(per|tease)|prostitut\w*|brothel|hentai|playboy|courtesan|odalisque|baigneuses?|bathers?|nu|nue|desnud[oa]s?|corpses?|cadavers?|autops\w*|gore|gory|behead\w*|decapitat\w*|mutilat\w*|lynch\w*|dismember\w*|suicide|cocaine|heroin)\b|обнаж|эрот|голая|голый|порн|секс|yalang'och|erotik|jinsiy/i;
+  /\b(nudes?|nudity|naked|nakedness|topless|bare[- ]?breast\w*|breasts?|nipples?|erotic\w*|sex|sexual\w*|sexy|porn\w*|xxx|nsfw|lingerie|underwear|bikini|swimsuits?|genital\w*|penis|vagina|vulva|phall\w*|intercourse|orgy|fetish\w*|bdsm|bondage|strip(per|tease)|prostitut\w*|brothel|hentai|playboy|courtesan|odalisque|baigneuses?|bathers?|nu|nue|desnud[oa]s?|corpses?|cadavers?|autops\w*|gore|gory|behead\w*|decapitat\w*|mutilat\w*|lynch\w*|dismember\w*|suicide|cocaine|heroin|alcohol\w*|beers?|wines?|vodka|whiske?y|liquor|cocktails?|drunk\w*|casinos?|gambl\w*|satan\w*|occult\w*|pentagram\w*)\b|обнаж|эрот|голая|голый|порн|секс|yalang'och|erotik|jinsiy/i;
 
 export function unsafeText(...parts: unknown[]): boolean {
   return UNSAFE.test(

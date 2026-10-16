@@ -117,7 +117,7 @@ export class AdminController {
     return this.adminService.publishingStatus();
   }
 
-  // AI qoralama (fonda): mavzu yoki Wikipedia havolasi bo'yicha (bo'sh — bugungi tanlangan maqola)
+  // AI qoralama (fonda): mavzu yoki Wikipedia havolasi bo'yicha (bo'sh — bo'lim navbatidan AI tanlaydi)
   @Post('drafts/generate')
   generateDraft(
     @Request() req: any,

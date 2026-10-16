@@ -19,7 +19,6 @@ import { Category } from '../categories/models/category.model';
 import { User } from '../users/models/user.model';
 import { CloudflareService } from '../cloudflare/cloudflare.service';
 import {
-  featuredToday,
   findSource,
   related,
   WikiNotFoundError,
@@ -140,6 +139,14 @@ const UZ_RULES = `O'zbek tili qoidalari:
 - O'quvchiga "siz" deb murojaat qil; jargon va haddan tashqari ko'tarinki, reklama ohangidagi iboralardan qoch.
 - Maqola oilaviy auditoriyaga (bolalar va o'smirlar ham) mos bo'lsin: jinsiy, shahvoniy yoki shok (qon, qiynoq) tafsilotlarni yozma; zarur bo'lsa, umumiy va ehtiyotkor tilda ayt.`;
 
+// Sayt qadriyatlari: o'quvchilar asosan musulmon oilalar, bolalar ham o'qiydi
+const VALUES_RULES = `Sayt qadriyatlari (qat'iy):
+- O'quvchilar asosan musulmon oilalar. Islom aqidasi va axloqiga zid narsalarni targ'ib qilma, ijobiy yoki havas qilinadigan qilib ko'rsatma: spirtli ichimlik, giyohvandlik, qimor va tikish, nikohsiz munosabatlar, sehr-jodu, folbinlik va munajjimlik (bashorat sifatida), butparastlik va shirk, LGBT targ'iboti.
+- Islom, Qur'on, Payg'ambarimiz (s.a.v.), sahobalar va diniy qadriyatlarni tanqid qilma, masxara qilma, ular haqida shubha uyg'otma. Diniy bahs-munozaralarga kirma; boshqa dinlarni ham haqorat qilma.
+- Ilmiy nazariyalarni (masalan, evolyutsiya yoki koinot kelib chiqishi) "olimlar fikricha" tarzida xolis bayon qil; din haqida xulosa chiqarma va ateizmni targ'ib qilma.
+- Mavzu bunday narsaga beixtiyor tegsa (masalan, film qahramoni ichadi yoki qimor o'ynaydi) — tafsilotga kirmasdan, qisqa va betaraf o'tib ket.
+- 18+ mazmun yo'q: jinsiy, shahvoniy, ochiq sahnalar va shok tafsilotlar yozilmaydi.`;
+
 const FORMAT_RULES = (categories: string[]) => `Format:
 - Hajm: 900–1400 so'z, 4–7 ta <h2> bo'lim (kerak bo'lsa <h3>).
 - HTML: faqat <h2>, <h3>, <p>, <ul>, <ol>, <li>, <strong>, <em>, <blockquote>. <h1>, rasm, havola, markdown va [1] kabi manba belgilarini matnga qo'yma. "Manbalar" bo'limini yozma — uni tizim o'zi qo'shadi.
@@ -148,7 +155,7 @@ const FORMAT_RULES = (categories: string[]) => `Format:
 - category: quyidagilardan aynan bittasi: ${categories.join(', ')}.
 - tags: 3–5 ta qisqa o'zbekcha teg.
 - sources: haqiqatan foydalangan manbalaringning raqamlari.
-- familySafe: maqola mavzusi va mazmuni umumiy auditoriya (bolalar va o'smirlar ham) uchun mos bo'lsa true; jinsiy, pornografik yoki o'ta shafqatsiz mavzu bo'lsa false.
+- familySafe: maqola mavzusi va mazmuni musulmon oila (bolalar va o'smirlar ham) uchun mos bo'lsa true; mavzuning o'zi 18+ (jinsiy, erotik, o'ta shafqatsiz) yoki Islom qadriyatlariga zid narsa (spirtli ichimlik, qimor, okkultizm, LGBT, dinni masxara qilish) atrofida qurilgan bo'lsa false.
 - imageQueries: muqova rasmini topish uchun 2–3 ta INGLIZCHA qidiruv so'zi — aniq, ko'rinadigan obyekt (masalan "Messier 87 black hole", "Registan Samarkand", "Lionel Messi World Cup"), mavhum so'zlar emas.
 Javob faqat JSON: {"title": "...", "excerpt": "...", "category": "...", "tags": ["..."], "sources": [1, 2], "familySafe": true, "imageQueries": ["..."], "html": "..."}`;
 
@@ -199,8 +206,8 @@ const tashkentDay = (d = new Date()) =>
  * yoki rejalashtiradi — keyin Telegram/Instagram avtomatik ketadi.
  *
  * Kunlik rejim: har kuni Toshkent vaqti bilan 06:00 dan keyin bitta qoralama —
- * admin kiritgan mavzular navbatidan, navbat bo'sh bo'lsa Wikipedia'ning
- * bugungi tanlangan maqolasidan.
+ * admin kiritgan mavzular navbatidan, navbat bo'sh bo'lsa bo'limlar navbatidan
+ * (har bo'lim bittadan, Kino ikki marta) AI o'zi mavzu tanlaydi.
  */
 @Injectable()
 export class DraftsService implements OnModuleInit, OnModuleDestroy {
@@ -393,17 +400,20 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   // ---------- Qoralama yozish ----------
 
   /**
-   * Manbalarni yig'adi: asosiy Wikipedia maqolasi, katta modelda yana 1–2 ta
-   * yaqin maqola va arXiv'dagi so'nggi ishlar. Mavzusiz — bugungi tanlangan maqola.
+   * Asosiy Wikipedia maqolasi: berilgan mavzu bo'yicha yoki (mavzusiz) bo'lim
+   * uchun AI tanlagan mavzu. Ikkala holda ham sayt qoidalariga mosligi
+   * yozishdan oldin tekshiriladi.
    */
-  private async gatherSources(topic: string, llm: Llm): Promise<Source[]> {
-    const big = llm.sourceBudget >= 20000;
-    const mainChars = big ? 14000 : 5500;
+  private async mainSource(
+    topic: string,
+    categoryId: number | undefined,
+    llm: Llm,
+  ): Promise<{ main: WikiSource; categoryId?: number }> {
+    const mainChars = llm.sourceBudget >= 20000 ? 14000 : 5500;
+    if (!topic) return this.autoTopic(categoryId, mainChars, llm);
     let main: WikiSource;
     try {
-      main = topic
-        ? await this.findTopic(topic, mainChars, llm)
-        : await featuredToday(new Date(), mainChars);
+      main = await this.findTopic(topic, mainChars, llm);
     } catch (err: any) {
       if (err instanceof WikiNotFoundError) {
         throw new BadRequestException(err.message);
@@ -413,6 +423,145 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
         `Wikipedia bilan aloqa bo'lmadi: ${err?.message ?? 'xato'}. Birozdan keyin qayta urinib ko'ring.`,
       );
     }
+    const verdict = await this.checkTopic(main, llm);
+    if (!verdict.ok) {
+      throw new BadRequestException(
+        `Mavzu sayt qoidalariga mos emas (18+ yoki Islom qadriyatlariga zid): ${verdict.reason}`,
+      );
+    }
+    return { main, categoryId };
+  }
+
+  /** Yozishdan oldin arzon tekshiruv: mavzu musulmon oila o'quvchisiga mosmi */
+  private async checkTopic(
+    main: WikiSource,
+    llm: Llm,
+  ): Promise<{ ok: boolean; reason: string }> {
+    try {
+      const raw = await llm.json(
+        `Sen o'zbek ta'lim saytining muharririsan. O'quvchilar asosan musulmon oilalar, bolalar va o'smirlar ham bor. Berilgan Wikipedia maqolasi shu sayt uchun maqola MAVZUSI sifatida mosmi?
+Mos EMAS, agar mavzuning o'zi: 18+ (jinsiy, erotik, pornografik; ochiq sahnalari bilan tanilgan yoki 18+ / NC-17 reytingli film), o'ta shafqatsiz yoki dahshat (gore, qiynoq, seriyali qotillar), spirtli ichimlik, giyohvandlik, qimor yoki kazino, sehr-jodu, okkultizm, satanizm, LGBT, Islomni yoki boshqa dinni tanqid qilish va masxara qilish atrofida qurilgan bo'lsa.
+Oddiy ilmiy, tarixiy, sport, san'at, texnologiya va oilaviy kino mavzulari — mos. Mavzu bunday narsalarga faqat yo'l-yo'lakay tegsa — baribir mos.
+Javob faqat JSON: {"ok": true yoki false, "reason": "qisqa izoh"}`,
+        `"${main.title}"\n${main.text.slice(0, 3000)}`,
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      return {
+        ok: j?.ok !== false,
+        reason: String(j?.reason ?? '').slice(0, 200),
+      };
+    } catch (err: any) {
+      // Tekshiruv ishlamasa — muallif bosqichidagi familySafe baribir to'xtatadi
+      this.logger.warn(`Mavzu tekshiruvi bajarilmadi: ${err?.message}`);
+      return { ok: true, reason: '' };
+    }
+  }
+
+  /**
+   * Bo'limlar navbati: har bir bo'lim bittadan, Kino — ikki marta (navbat
+   * boshida va o'rtasida). Ko'rsatkich app_settings ai_rotation'da.
+   */
+  static rotation<T extends { name: string }>(categories: T[]): T[] {
+    const isKino = (c: T) => c.name.trim().toLowerCase() === 'kino';
+    const kino = categories.find(isKino);
+    const rest = categories.filter((c) => !isKino(c));
+    if (!kino) return rest;
+    const half = Math.ceil(rest.length / 2);
+    return [kino, ...rest.slice(0, half), kino, ...rest.slice(half)];
+  }
+
+  private async nextRotationCategory() {
+    const categories = (await this.categoryModel.findAll({
+      attributes: ['id', 'name'],
+      order: [['id', 'ASC']],
+      raw: true,
+    })) as unknown as { id: number; name: string }[];
+    const cycle = DraftsService.rotation(categories);
+    if (!cycle.length) return undefined;
+    const i = Number(await this.getSetting('ai_rotation')) || 0;
+    await this.setSetting('ai_rotation', String((i + 1) % cycle.length));
+    return cycle[i % cycle.length];
+  }
+
+  /**
+   * Mavzu berilmagan: bo'lim (tanlangan yoki navbatdagi) uchun AI bir nechta
+   * aniq Wikipedia mavzusini taklif qiladi — saytda borlarini takrorlamasdan;
+   * birinchi topilgan va qoidalarga mos kelgani olinadi.
+   */
+  private async autoTopic(
+    categoryId: number | undefined,
+    mainChars: number,
+    llm: Llm,
+  ): Promise<{ main: WikiSource; categoryId?: number }> {
+    const category = categoryId
+      ? ((await this.categoryModel.findByPk(categoryId, {
+          attributes: ['id', 'name'],
+          raw: true,
+        })) as unknown as { id: number; name: string } | null)
+      : await this.nextRotationCategory();
+    const name = category?.name ?? 'Umumiy';
+    const existing = category
+      ? ((await this.articleModel.findAll({
+          where: { categoryId: category.id },
+          attributes: ['title'],
+          order: [['createdAt', 'DESC']],
+          limit: 80,
+          raw: true,
+        })) as unknown as { title: string }[])
+      : [];
+    const kino = name.trim().toLowerCase() === 'kino';
+    const kinoRules = kino
+      ? "Kino bo'limi uchun: butun oila bilan ko'rsa bo'ladigan mashhur, yuqori baholangan filmlar, multfilmlar, rejissyorlar yoki kino tarixi va texnologiyasi. 18+ / R / NC-17 reytingli, ochiq sahnali, dahshat, okkult yoki zo'ravonlikka urg'u bergan filmlarni tanlama.\n"
+      : '';
+    let titles: string[] = [];
+    try {
+      const raw = await llm.json(
+        `Sen Bilim Manba (o'zbek tilidagi ilmiy-ommabop sayt) bosh muharririsan. "${name}" bo'limi uchun keyingi maqola mavzusini tanlaysan.
+6 ta turli, aniq va qiziqarli mavzu taklif qil. Har biri INGLIZCHA Wikipedia maqolasining aynan nomi bo'lsin (masalan, aniq film, shaxs, kashfiyot, voqea yoki hodisa) — umumiy so'z emas.
+${kinoRules}Mavzular musulmon oila o'quvchisiga mos bo'lsin: 18+, spirtli ichimlik, qimor, okkultizm, LGBT, dinni tanqid qilish mavzulari bo'lmasin.
+Saytda shu bo'limda allaqachon bor maqolalar (bularni va ularga juda yaqin mavzularni takrorlama):
+${existing.map((a) => `- ${a.title}`).join('\n') || "- (hali yo'q)"}
+Javob faqat JSON: {"titles": ["..."]}`,
+        name,
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      titles = (Array.isArray(j?.titles) ? j.titles : [])
+        .map((t: unknown) => String(t ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 6);
+    } catch (err: any) {
+      throw new ServiceUnavailableException(
+        `AI "${name}" bo'limi uchun mavzu tanlay olmadi: ${String(err?.message ?? '').slice(0, 200)}`,
+      );
+    }
+    for (const t of titles) {
+      let main: WikiSource;
+      try {
+        main = await findSource(t, mainChars);
+      } catch {
+        continue;
+      }
+      const verdict = await this.checkTopic(main, llm);
+      if (verdict.ok) {
+        this.logger.log(`Avto mavzu (${name}): ${main.title}`);
+        return { main, categoryId: category?.id };
+      }
+      this.logger.warn(
+        `Avto mavzu rad etildi: ${main.title} — ${verdict.reason}`,
+      );
+    }
+    throw new ServiceUnavailableException(
+      `"${name}" bo'limi uchun mos mavzu topilmadi. Qayta urinib ko'ring yoki mavzuni o'zingiz yozing.`,
+    );
+  }
+
+  /** Asosiy maqolaga yaqin Wikipedia maqolalari va arXiv'dagi so'nggi ishlar */
+  private async gatherSources(main: WikiSource, llm: Llm): Promise<Source[]> {
+    const big = llm.sourceBudget >= 20000;
     const [rel, papers] = await Promise.all([
       related(main, big ? 2 : 0, 5000).catch(() => []),
       main.lang === 'en'
@@ -469,7 +618,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  /** Mavzu (yoki Wikipedia havolasi) bo'yicha qoralama; mavzusiz — bugungi tanlangan maqola */
+  /** Mavzu (yoki Wikipedia havolasi) bo'yicha qoralama; mavzusiz — bo'lim navbatidan AI tanlaydi */
   async generate(opts: {
     topic?: string;
     categoryId?: number;
@@ -482,7 +631,8 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       );
     }
     const topic = String(opts.topic ?? '').trim();
-    const sources = await this.gatherSources(topic, llm);
+    const picked = await this.mainSource(topic, opts.categoryId, llm);
+    const sources = await this.gatherSources(picked.main, llm);
 
     // raw: Category modelida `name` class field — instance'da undefined bo'ladi
     const categories = (await this.categoryModel.findAll({
@@ -497,16 +647,16 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
 
     const title = normalize(draft.title ?? '').trim() || sources[0].title;
     const category =
-      categories.find((c) => c.id === Number(opts.categoryId)) ??
+      categories.find((c) => c.id === Number(picked.categoryId)) ??
       categories.find(
         (c) =>
           c.name.toLowerCase() === String(draft.category ?? '').toLowerCase(),
       ) ??
       categories[0];
-    // Mavzu 18+ bo'lsa (kunlik rejimda Wikipedia'dan tasodifan kelishi mumkin) — to'xtaymiz
+    // Mavzu 18+ yoki qadriyatlarga zid bo'lsa (tekshiruvdan o'tib ketgan bo'lsa ham) — to'xtaymiz
     if (draft.familySafe === false) {
       throw new BadRequestException(
-        'Mavzu umumiy auditoriya uchun mos emas (18+) — qoralama yozilmadi',
+        'Mavzu sayt qoidalariga mos emas (18+ yoki Islom qadriyatlariga zid) — qoralama yozilmadi',
       );
     }
     const html = sanitizeHtml(draft.html ?? '');
@@ -853,7 +1003,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
 - ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar;
 - jinsiy mazmun yoki ishora;
 - qon, jarohat, murda, zo'ravonlik, qiynoq, qatl;
-- giyohvand moddalar, o'z-o'ziga zarar.
+- giyohvand moddalar, o'z-o'ziga zarar;
+- spirtli ichimliklar (shisha, qadah, bar), qimor va kazino;
+- sehr-jodu va okkult belgilari (shayton, pentagramma).
 Shubha bo'lsa ham — xavfli deb belgila.
 Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
         `Rasm: ${c.title} — ${c.provider}`,
@@ -980,7 +1132,7 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
       if (!ok.length) return [];
       const raw = await llm.vision(
         `Sen ilmiy-ommabop jurnalning foto-muharririsan. Maqola uchun muqova rasmini tanlaysan. Rasmlar tartib bilan berilgan (birinchisi 0-raqam).
-AVVAL XAVFSIZLIK: sayt o'quvchilari orasida bolalar va o'smirlar bor. Quyidagilardan birortasi bo'lgan rasmlarni "unsafe" ro'yxatiga yoz va hech qachon tanlama: har qanday yalang'ochlik (san'at asari, haykal, tarixiy yoki tibbiy rasm bo'lsa ham); ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar; jinsiy mazmun yoki ishora; qon, jarohat, murda, zo'ravonlik, qatl; giyohvand moddalar. Shubha bo'lsa ham — unsafe.
+AVVAL XAVFSIZLIK: sayt o'quvchilari orasida bolalar va o'smirlar bor. Quyidagilardan birortasi bo'lgan rasmlarni "unsafe" ro'yxatiga yoz va hech qachon tanlama: har qanday yalang'ochlik (san'at asari, haykal, tarixiy yoki tibbiy rasm bo'lsa ham); ichki kiyim, cho'milish kiyimi yoki tanaga urg'u berilgan, shahvoniy ohangdagi suratlar; jinsiy mazmun yoki ishora; qon, jarohat, murda, zo'ravonlik, qatl; giyohvand moddalar; spirtli ichimliklar (shisha, qadah, bar), qimor va kazino; sehr-jodu va okkult belgilari (shayton, pentagramma). Shubha bo'lsa ham — unsafe.
 Keyin qolganlaridan tanla. Talablar: maqola mavzusiga aniq aloqador; sifatli, chiroyli, ko'zni tortadigan; gorizontal kompozitsiya; ustida matn, vatermark, logotip, ramka bo'lmasin; kolaj, jadval, sxema yoki xarita bo'lmasin (agar mavzu aynan shuni talab qilmasa).
 Pexels rasmlari professional fotograflarning ishlari — mavzuga mos bo'lsa, ularni birinchi navbatda tanla; Pexels'da mosi bo'lmasa, boshqalaridan tanla.
 Eng yaxshisidan boshlab eng ko'pi 4 ta rasm raqamini qaytar. Aniq mos rasm bo'lmasa ham, mavzuga eng yaqin yoki uning kayfiyatini beradigan xavfsiz rasmlarni tartib bilan ber. Faqat hammasi xavfli yoki mavzuga mutlaqo aloqasiz bo'lsa — bo'sh ro'yxat.
@@ -1107,6 +1259,8 @@ Aniqlik:
 - Faqat manbalardagi faktlarga tayan. Manbada yo'q raqam, sana, ism yoki iqtibos to'qima. Ishonchsiz bo'lsang, umumiyroq yoz.
 
 ${UZ_RULES}
+
+${VALUES_RULES}
 ${
   style
     ? `
@@ -1136,6 +1290,9 @@ ${FORMAT_RULES(categories)}`;
 5. Hajm va tuzilishni saqla (900–1400 so'z); maqolani qisqartirib yuborma.
 
 ${UZ_RULES}
+
+${VALUES_RULES}
+6. Sayt qadriyatlariga zid jumla yoki tafsilot bo'lsa — olib tashla yoki betaraf qilib qayta yoz.
 
 ${FORMAT_RULES(categories)}
 To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
