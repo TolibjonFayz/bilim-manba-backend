@@ -62,6 +62,16 @@ export class DataMigrationsService implements OnModuleInit {
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // Maqola oxiridagi test (QuizService) va o'quvchilar natijasi
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS article_quizzes (
+        "articleId" INTEGER PRIMARY KEY,
+        questions JSONB NOT NULL,
+        attempts INTEGER NOT NULL DEFAULT 0,
+        "correctTotal" INTEGER NOT NULL DEFAULT 0,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS data_migrations (
         id VARCHAR(255) PRIMARY KEY,

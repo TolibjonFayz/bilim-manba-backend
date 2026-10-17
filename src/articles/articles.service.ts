@@ -1,4 +1,5 @@
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
+import { QuizService } from 'src/quiz/quiz.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { BookmarksService } from 'src/bookmarks/bookmarks.service';
 import { Category } from 'src/categories/models/category.model';
@@ -18,6 +19,7 @@ export class ArticlesService {
     @InjectModel(Category) private categoryModel: typeof Category,
     private likesService: LikesService,
     private bookmarksService: BookmarksService,
+    private quiz: QuizService,
   ) {}
 
   // Faqat published maqolalar — oddiy userlar uchun
@@ -39,6 +41,10 @@ export class ArticlesService {
       ],
       order: [['createdAt', 'DESC']],
     });
+  }
+
+  quizResult(slug: string, correct: number) {
+    return this.quiz.recordResult(slug, correct);
   }
 
   // Maqola slug bo'yicha qidirish
@@ -67,7 +73,10 @@ export class ArticlesService {
       );
     }
 
-    return { ...article.toJSON(), isLiked, isBookmarked };
+    // Maqola oxiridagi test (bo'lmasa null) — alohida jadvaldan
+    const quiz = await this.quiz.forArticle(article.id);
+
+    return { ...article.toJSON(), isLiked, isBookmarked, quiz };
   }
 
   async recordView(slug: string, userId?: number) {

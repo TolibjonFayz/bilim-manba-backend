@@ -17,6 +17,7 @@ import { InstagramService } from './instagram.service';
 import { SocialImageService } from './social-image.service';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from './admin-alert.service';
+import { QuizService } from '../quiz/quiz.service';
 
 /**
  * Model nusxasini oddiy obyektga aylantiradi. Article/Category modellarida
@@ -56,6 +57,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     private readonly socialImages: SocialImageService,
     private readonly cloudinary: CloudinaryService,
     private readonly alerts: AdminAlertService,
+    private readonly quiz: QuizService,
   ) {}
 
   onModuleInit() {
@@ -161,6 +163,9 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     });
     if (!article || article.status !== ArticleStatus.PUBLISHED)
       return { telegram: null, instagram: null };
+
+    // Maqola oxiridagi test — fonda (AI 10–60 s), nashrni kutdirmaydi
+    void this.quiz.generateFor(article.id);
 
     // null — ulanmagan, false — yuborilmadi (xato loglarda)
     const telegram = this.telegram.configured

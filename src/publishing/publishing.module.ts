@@ -10,6 +10,7 @@ import { TelegramService } from './telegram.service';
 import { InstagramService } from './instagram.service';
 import { SocialImageService } from './social-image.service';
 import { AdminAlertService } from './admin-alert.service';
+import { QuizModule } from '../quiz/quiz.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
 @Module({
@@ -19,6 +20,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     NotificationsModule,
     SubscribersModule,
     CloudinaryModule,
+    QuizModule,
   ],
   providers: [
     PublishingService,

@@ -8,6 +8,7 @@ import { CloudflareService } from 'src/cloudflare/cloudflare.service';
 import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { PublishingService } from 'src/publishing/publishing.service';
+import { QuizService } from 'src/quiz/quiz.service';
 
 @Injectable()
 export class AdminService {
@@ -20,6 +21,7 @@ export class AdminService {
     private cloudflareService: CloudflareService,
     private cloudinaryService: CloudinaryService,
     private publishing: PublishingService,
+    private quiz: QuizService,
   ) {}
 
   // Dashboard statistika
@@ -97,6 +99,14 @@ export class AdminService {
     }
 
     await this.articleModel.update(rest, { where: { id } });
+    // Chop etilgan maqola matni o'zgardi — test eskirmasin (fonda qayta tuziladi)
+    if (
+      before?.status === 'published' &&
+      rest.content &&
+      rest.content !== before.content
+    ) {
+      void this.quiz.generateFor(id);
+    }
 
     // Qoralama → chop etildi: sana yangilanadi va Telegram/email ishga tushadi
     if (status === 'published' && before?.status !== 'published') {
