@@ -9,6 +9,7 @@ import { BookmarksModule } from 'src/bookmarks/bookmarks.module';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { ArticleViewsModule } from 'src/article-views/article-views.module';
 import { QuizModule } from 'src/quiz/quiz.module';
+import { SeriesModule } from 'src/series/series.module';
 
 @Module({
   imports: [
@@ -17,6 +18,7 @@ import { QuizModule } from 'src/quiz/quiz.module';
     ArticleViewsModule,
     BookmarksModule,
     QuizModule,
+    SeriesModule,
   ],
   providers: [ArticlesService],
   controllers: [ArticlesController],

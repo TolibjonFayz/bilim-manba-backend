@@ -62,6 +62,27 @@ export class DataMigrationsService implements OnModuleInit {
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // Maqolalar seriyasi (SeriesService): bir maqola — ko'pi bilan bitta seriyada
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS series (
+        id SERIAL PRIMARY KEY,
+        title VARCHAR(200) NOT NULL,
+        slug VARCHAR(200) NOT NULL UNIQUE,
+        description TEXT,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS series_articles (
+        "articleId" INTEGER PRIMARY KEY,
+        "seriesId" INTEGER NOT NULL REFERENCES series(id) ON DELETE CASCADE,
+        position INTEGER NOT NULL
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS series_articles_series_idx ON series_articles ("seriesId", position)',
+    );
     // Maqola oxiridagi test (QuizService) va o'quvchilar natijasi
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS article_quizzes (

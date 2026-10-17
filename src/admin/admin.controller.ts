@@ -22,6 +22,7 @@ import { DraftsService } from '../drafts/drafts.service';
 import { Period, StatsService } from '../stats/stats.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
+import { SeriesService } from '../series/series.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -36,6 +37,7 @@ export class AdminController {
     private stats: StatsService,
     private searchConsole: SearchConsoleService,
     private alerts: AdminAlertService,
+    private series: SeriesService,
   ) {}
 
   // Dashboard statistika
@@ -143,6 +145,42 @@ export class AdminController {
   @Post('articles/:id/cover/regenerate')
   regenerateCover(@Param('id') id: string) {
     return this.drafts.regenerateCover(+id);
+  }
+
+  // Maqolalar seriyasi: ro'yxat (qoralama qismlar va navbatdagilar bilan), CRUD,
+  // AI reja va rejani kunlik navbatga qo'shish
+  @Get('series')
+  seriesList() {
+    return this.series.adminList();
+  }
+
+  @Post('series')
+  seriesCreate(@Body() body: { title?: string; description?: string }) {
+    return this.series.create(body);
+  }
+
+  @Put('series/:id')
+  seriesUpdate(
+    @Param('id') id: string,
+    @Body()
+    body: { title?: string; description?: string; articleIds?: number[] },
+  ) {
+    return this.series.update(+id, body);
+  }
+
+  @Delete('series/:id')
+  seriesRemove(@Param('id') id: string) {
+    return this.series.remove(+id);
+  }
+
+  @Post('series/:id/plan')
+  seriesPlan(@Param('id') id: string, @Body() body: { parts?: number }) {
+    return this.series.plan(+id, Number(body?.parts) || 4);
+  }
+
+  @Post('series/:id/enqueue')
+  seriesEnqueue(@Param('id') id: string, @Body() body: { parts?: unknown }) {
+    return this.series.enqueue(+id, body?.parts);
   }
 
   // Adminga shaxsiy Telegram xabarlari: holat, ulash, tekshirish, sinov, uzish

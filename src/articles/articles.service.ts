@@ -1,5 +1,6 @@
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { QuizService } from 'src/quiz/quiz.service';
+import { SeriesService } from 'src/series/series.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { BookmarksService } from 'src/bookmarks/bookmarks.service';
 import { Category } from 'src/categories/models/category.model';
@@ -20,6 +21,7 @@ export class ArticlesService {
     private likesService: LikesService,
     private bookmarksService: BookmarksService,
     private quiz: QuizService,
+    private series: SeriesService,
   ) {}
 
   // Faqat published maqolalar — oddiy userlar uchun
@@ -73,10 +75,13 @@ export class ArticlesService {
       );
     }
 
-    // Maqola oxiridagi test (bo'lmasa null) — alohida jadvaldan
-    const quiz = await this.quiz.forArticle(article.id);
+    // Maqola oxiridagi test va seriya (bo'lmasa null) — alohida jadvallardan
+    const [quiz, series] = await Promise.all([
+      this.quiz.forArticle(article.id),
+      this.series.forArticle(article.id),
+    ]);
 
-    return { ...article.toJSON(), isLiked, isBookmarked, quiz };
+    return { ...article.toJSON(), isLiked, isBookmarked, quiz, series };
   }
 
   async recordView(slug: string, userId?: number) {
@@ -171,6 +176,8 @@ export class ArticlesService {
       attributes: ['slug', 'updatedAt'],
     });
 
-    return { articles, categories };
+    const series = await this.series.sitemap();
+
+    return { articles, categories, series };
   }
 }

@@ -6,6 +6,7 @@ import { User } from '../users/models/user.model';
 import { CloudflareModule } from '../cloudflare/cloudflare.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { PublishingModule } from '../publishing/publishing.module';
+import { SeriesModule } from '../series/series.module';
 import { DraftsService } from './drafts.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 
@@ -15,6 +16,7 @@ import { SearchConsoleService } from '../search-console/search-console.service';
     CloudflareModule,
     CloudinaryModule,
     PublishingModule,
+    SeriesModule,
   ],
   // Search Console shu yerda — AI mavzu tanlashda qidiruv talabidan foydalanadi
   providers: [DraftsService, SearchConsoleService],

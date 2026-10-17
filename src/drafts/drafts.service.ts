@@ -37,6 +37,7 @@ import {
 } from './images';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
+import { SeriesService } from '../series/series.service';
 import {
   DemandRow,
   SearchConsoleService,
@@ -237,6 +238,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     private readonly cloudinary: CloudinaryService,
     private readonly alerts: AdminAlertService,
     private readonly searchConsole: SearchConsoleService,
+    private readonly series: SeriesService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -930,6 +932,8 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
       categoryId: category?.id,
       authorId,
     } as any);
+    // Seriya rejasidan navbatga qo'yilgan mavzu bo'lsa — o'z qismiga biriktiriladi
+    await this.series.attachQueued(topic, article.id);
     this.logger.log(
       `AI qoralama yaratildi: ${slug} (${llm.name}; muqova: ${cover ? 'bor' : "yo'q"}; manbalar: ${used.map((u) => u.url).join(', ')})`,
     );
