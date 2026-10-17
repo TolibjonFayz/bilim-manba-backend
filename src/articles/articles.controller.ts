@@ -53,7 +53,7 @@ export class ArticlesController {
   // Create article (admin)
   @ApiOperation({ summary: 'Create article (admin)' })
   @ApiBearerAuth()
-  // @UseGuards(JwtAuthGuard, RolesGuard)
+  @UseGuards(JwtAuthGuard, RolesGuard)
   @Roles('admin')
   @Post('create')
   create(@Body() dto: CreateArticleDto, @Request() req) {
@@ -85,6 +85,12 @@ export class ArticlesController {
   @Get('search')
   search(@Query('q') q: string) {
     return this.articlesService.search(q);
+  }
+
+  // Maqola oxiridagi testni tugatdi (hammaga ochiq): to'g'ri javoblar soni 0–3
+  @Post('quiz-result/:slug')
+  quizResult(@Param('slug') slug: string, @Body() body: { correct?: number }) {
+    return this.articlesService.quizResult(slug, Number(body?.correct));
   }
 
   @Post('view/:slug')
