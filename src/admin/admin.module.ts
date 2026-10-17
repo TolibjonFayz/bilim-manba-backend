@@ -17,7 +17,6 @@ import { NotificationsModule } from 'src/notifications/notifications.module';
 import { PublishingModule } from 'src/publishing/publishing.module';
 import { DraftsModule } from 'src/drafts/drafts.module';
 import { StatsService } from 'src/stats/stats.service';
-import { SearchConsoleService } from 'src/search-console/search-console.service';
 
 @Module({
   imports: [
@@ -31,7 +30,8 @@ import { SearchConsoleService } from 'src/search-console/search-console.service'
     PublishingModule,
     DraftsModule,
   ],
-  providers: [AdminService, StatsService, SearchConsoleService],
+  // SearchConsoleService — DraftsModule'dan (bitta nusxa, umumiy kesh)
+  providers: [AdminService, StatsService],
   controllers: [AdminController],
 })
 export class AdminModule {}

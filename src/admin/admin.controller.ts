@@ -123,11 +123,12 @@ export class AdminController {
   @Post('drafts/generate')
   generateDraft(
     @Request() req: any,
-    @Body() body: { topic?: string; categoryId?: number },
+    @Body() body: { topic?: string; categoryId?: number; source?: string },
   ) {
     return this.drafts.startGenerate({
       topic: body?.topic,
       categoryId: body?.categoryId ? +body.categoryId : undefined,
+      source: body?.source === 'search' ? 'search' : undefined,
       authorId: req.user?.userId,
     });
   }

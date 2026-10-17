@@ -7,6 +7,7 @@ import { CloudflareModule } from '../cloudflare/cloudflare.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { PublishingModule } from '../publishing/publishing.module';
 import { DraftsService } from './drafts.service';
+import { SearchConsoleService } from '../search-console/search-console.service';
 
 @Module({
   imports: [
@@ -15,7 +16,8 @@ import { DraftsService } from './drafts.service';
     CloudinaryModule,
     PublishingModule,
   ],
-  providers: [DraftsService],
-  exports: [DraftsService],
+  // Search Console shu yerda — AI mavzu tanlashda qidiruv talabidan foydalanadi
+  providers: [DraftsService, SearchConsoleService],
+  exports: [DraftsService, SearchConsoleService],
 })
 export class DraftsModule {}

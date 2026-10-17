@@ -37,6 +37,10 @@ import {
 } from './images';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
+import {
+  DemandRow,
+  SearchConsoleService,
+} from '../search-console/search-console.service';
 
 // AI qoralamalarini shu belgi bilan taniymiz (manbalar maqola oxirida)
 export const AI_SOURCE = 'Bilim Manba AI';
@@ -44,6 +48,8 @@ export const AI_SOURCE = 'Bilim Manba AI';
 const LEGACY_AI_SOURCE = 'Wikipedia (Bilim Manba AI)';
 // Ko'rib chiqilmagan AI qoralamalari shundan ko'p bo'lsa, kunlik qoralama yozilmaydi
 const MAX_PENDING = 3;
+// Qidiruv so'rovi yangi maqolaga arzishi uchun 90 kunda kamida shuncha ko'rinish
+const DEMAND_MIN_IMPRESSIONS = 5;
 // Kunlik qoralama Toshkent vaqti bilan shu soatdan keyin yoziladi
 const DAILY_HOUR = 6;
 const TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
@@ -110,6 +116,9 @@ const CATEGORY_IMAGE_QUERIES: Record<string, string[]> = {
   umumiy: ['books library reading', 'open book warm light'],
 };
 const DEFAULT_IMAGE_QUERIES = ['books library reading', 'open book warm light'];
+
+/** Google qidiruvida yangi mavzu topilmadi — kunlik rejim bo'limlar navbatiga o'tadi */
+class NoDemandTopicError extends ServiceUnavailableException {}
 
 const categoryQueries = (name?: string | null) =>
   CATEGORY_IMAGE_QUERIES[
@@ -227,6 +236,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     private readonly cloudflare: CloudflareService,
     private readonly cloudinary: CloudinaryService,
     private readonly alerts: AdminAlertService,
+    private readonly searchConsole: SearchConsoleService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -245,6 +255,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     topic?: string;
     categoryId?: number;
     authorId?: number;
+    source?: 'search';
   }): DraftJob {
     if (this.job?.state === 'running') {
       throw new BadRequestException(
@@ -413,8 +424,16 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     topic: string,
     categoryId: number | undefined,
     llm: Llm,
-  ): Promise<{ main: WikiSource; categoryId?: number }> {
+    source?: 'search',
+  ): Promise<{ main: WikiSource; categoryId?: number; query?: string }> {
     const mainChars = llm.sourceBudget >= 20000 ? 14000 : 5500;
+    if (!topic && source === 'search') {
+      const found = await this.demandTopic(mainChars, llm);
+      if (found) return found;
+      throw new NoDemandTopicError(
+        "Google qidiruvida hali maqolasi yo'q yangi so'rov topilmadi. Boshqa usulni tanlang yoki birozdan keyin urinib ko'ring.",
+      );
+    }
     if (!topic) return this.autoTopic(categoryId, mainChars, llm);
     let main: WikiSource;
     try {
@@ -564,6 +583,165 @@ Javob faqat JSON: {"titles": ["..."]}`,
     );
   }
 
+  /**
+   * Google qidiruv talabi: Search Console'da ko'rinayotgan, lekin saytda
+   * yaxshi javobi yo'q so'rovlar (2-sahifa va undan pastda yoki maqola emas,
+   * bosh/kategoriya sahifasi chiqayotgan). AI ulardan saytda hali yo'q
+   * mavzularni tanlaydi. Ishlatilgan so'rovlar qayta olinmaydi.
+   */
+  private async demandTopic(
+    mainChars: number,
+    llm: Llm,
+  ): Promise<{ main: WikiSource; categoryId?: number; query: string } | null> {
+    let rows: DemandRow[] = [];
+    try {
+      rows = await this.searchConsole.demand(90);
+    } catch (err: any) {
+      this.logger.warn(`Search Console talabi olinmadi: ${err?.message}`);
+      return null;
+    }
+    const used = new Set(await this.usedQueries());
+    const candidates = rows
+      .filter(
+        (r) =>
+          r.impressions >= DEMAND_MIN_IMPRESSIONS &&
+          !used.has(r.query.toLowerCase()) &&
+          (r.position > 8 || !r.page.startsWith('/articles/')),
+      )
+      .slice(0, 40);
+    if (!candidates.length) return null;
+    const allowed = new Set(candidates.map((c) => c.query.toLowerCase()));
+
+    const [categories, existing] = await Promise.all([
+      this.categoryModel.findAll({ attributes: ['id', 'name'], raw: true }),
+      this.articleModel.findAll({
+        attributes: ['title'],
+        order: [['createdAt', 'DESC']],
+        limit: 200,
+        raw: true,
+      }),
+    ]);
+    const cats = categories as unknown as { id: number; name: string }[];
+    const titles = existing as unknown as { title: string }[];
+    let picks: { query: string; title: string; category?: string }[] = [];
+    try {
+      const raw = await llm.json(
+        `Sen Bilim Manba (o'zbek tilidagi ilmiy-ommabop sayt) bosh muharririsan. Senga Google'da odamlar qidirayotgan va saytimiz ko'rinayotgan, lekin yaxshi javob bera olmayotgan so'rovlar beriladi (ko'rinishlar soni va o'rni bilan).
+Vazifa: saytda hali alohida maqolasi YO'Q va yangi maqolaga arziydigan eng yaxshi 3 ta so'rovni tanla (ko'p qidirilgani birinchi). Har biri uchun shu mavzuni yorituvchi INGLIZCHA Wikipedia maqolasining aynan nomini va bo'limni ber.
+Tashlab ket: saytdagi mavjud maqola allaqachon javob beradigan so'rovlar; navigatsion so'rovlar (sayt nomi, "bilim manba"); juda umumiy yoki ma'nosiz so'rovlar; 18+, spirtli ichimlik, qimor, okkultizm, LGBT yoki dinni tanqid qilish mavzulari.
+Bo'limlar: ${cats.map((c) => c.name).join(', ')}.
+Saytdagi mavjud maqolalar:
+${titles.map((a) => `- ${a.title}`).join('\n')}
+Javob faqat JSON: {"picks": [{"query": "so'rov aynan", "title": "English Wikipedia title", "category": "bo'lim"}]}`,
+        candidates
+          .map(
+            (c) =>
+              `"${c.query}" — ${c.impressions} ko'rinish, o'rin ${c.position}, chiqayotgan sahifa ${c.page}`,
+          )
+          .join('\n'),
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      picks = (Array.isArray(j?.picks) ? j.picks : [])
+        .map((p: any) => ({
+          query: String(p?.query ?? '').trim(),
+          title: String(p?.title ?? '').trim(),
+          category: p?.category ? String(p.category) : undefined,
+        }))
+        // Faqat haqiqatan berilgan so'rovlar — AI o'zidan so'rov o'ylab topmasin
+        .filter(
+          (p: { query: string; title: string }) =>
+            p.title && allowed.has(p.query.toLowerCase()),
+        )
+        .slice(0, 3);
+    } catch (err: any) {
+      this.logger.warn(`Qidiruv mavzusi tanlanmadi: ${err?.message}`);
+      return null;
+    }
+    for (const p of picks) {
+      // Tanlangan so'rov qayta olinmasin (topilmasa ham — navbatni to'smasin)
+      await this.markQueryUsed(p.query);
+      let main: WikiSource;
+      try {
+        main = await findSource(p.title, mainChars);
+      } catch {
+        continue;
+      }
+      const verdict = await this.checkTopic(main, llm);
+      if (!verdict.ok) {
+        this.logger.warn(
+          `Qidiruv mavzusi rad etildi: ${main.title} — ${verdict.reason}`,
+        );
+        continue;
+      }
+      const cat = cats.find(
+        (c) => c.name.toLowerCase() === String(p.category ?? '').toLowerCase(),
+      );
+      this.logger.log(`Qidiruv mavzusi: "${p.query}" → ${main.title}`);
+      return { main, categoryId: cat?.id, query: p.query };
+    }
+    return null;
+  }
+
+  private async usedQueries(): Promise<string[]> {
+    try {
+      const v = JSON.parse((await this.getSetting('gsc_used_queries')) ?? '[]');
+      return Array.isArray(v) ? v.map(String) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async markQueryUsed(query: string) {
+    const list = await this.usedQueries();
+    list.push(query.toLowerCase());
+    await this.setSetting('gsc_used_queries', JSON.stringify(list.slice(-500)));
+  }
+
+  /**
+   * Ichki havolalar: saytdagi chop etilgan maqolalardan AI 3 ta eng yaqinini
+   * tanlaydi — "Shuningdek o'qing" ro'yxati (o'quvchi saytda qoladi, Google
+   * sahifalar bog'lanishini ko'radi). AI ishlamasa — o'sha bo'limning so'nggilari.
+   */
+  private async relatedLinks(
+    llm: Llm,
+    title: string,
+    excerpt: string,
+    categoryId?: number,
+  ): Promise<{ title: string; slug: string }[]> {
+    const pool = (await this.articleModel.findAll({
+      where: { status: ArticleStatus.PUBLISHED },
+      attributes: ['title', 'slug', 'categoryId'],
+      order: [['createdAt', 'DESC']],
+      limit: 150,
+      raw: true,
+    })) as unknown as { title: string; slug: string; categoryId: number }[];
+    if (!pool.length) return [];
+    try {
+      const raw = await llm.json(
+        `Yangi maqola uchun saytdagi mavjud maqolalardan mazmunan eng yaqin 3 tasini tanla (o'quvchi keyin o'qishi uchun). Faqat haqiqatan bog'liqlarini ol; bog'liq yo'q bo'lsa — kamroq.
+Javob faqat JSON: {"numbers": [n, ...]}`,
+        `Yangi maqola: ${title}\n${excerpt}\n\nMavjud maqolalar:\n${pool.map((a, i) => `${i}) ${a.title}`).join('\n')}`,
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      const picked = [
+        ...new Set<number>(
+          (Array.isArray(j?.numbers) ? j.numbers : []).map(Number),
+        ),
+      ]
+        .filter((n) => Number.isInteger(n) && pool[n])
+        .slice(0, 3)
+        .map((n) => pool[n]);
+      if (picked.length) return picked;
+    } catch (err: any) {
+      this.logger.warn(`Ichki havolalar AI bilan tanlanmadi: ${err?.message}`);
+    }
+    return pool.filter((a) => a.categoryId === categoryId).slice(0, 3);
+  }
+
   /** Asosiy maqolaga yaqin Wikipedia maqolalari va arXiv'dagi so'nggi ishlar */
   private async gatherSources(main: WikiSource, llm: Llm): Promise<Source[]> {
     const big = llm.sourceBudget >= 20000;
@@ -628,6 +806,8 @@ Javob faqat JSON: {"titles": ["..."]}`,
     topic?: string;
     categoryId?: number;
     authorId?: number;
+    /** Mavzusiz: 'search' — Google qidiruv talabidan, aks holda bo'limlar navbatidan */
+    source?: 'search';
   }) {
     const llm = this.getLlm();
     if (!llm) {
@@ -636,7 +816,12 @@ Javob faqat JSON: {"titles": ["..."]}`,
       );
     }
     const topic = String(opts.topic ?? '').trim();
-    const picked = await this.mainSource(topic, opts.categoryId, llm);
+    const picked = await this.mainSource(
+      topic,
+      opts.categoryId,
+      llm,
+      opts.source,
+    );
     const sources = await this.gatherSources(picked.main, llm);
 
     // raw: Category modelida `name` class field — instance'da undefined bo'ladi
@@ -648,6 +833,7 @@ Javob faqat JSON: {"titles": ["..."]}`,
       llm,
       sources,
       categories.map((c) => c.name),
+      picked.query,
     );
 
     const title = normalize(draft.title ?? '').trim() || sources[0].title;
@@ -701,7 +887,22 @@ Javob faqat JSON: {"titles": ["..."]}`,
       const c = cover.cover;
       items.push(coverCredit(c));
     }
-    const content = `${html}
+    // Ichki havolalar — Manbalar'dan oldin
+    const related = await this.relatedLinks(
+      llm,
+      title,
+      normalize(draft.excerpt ?? ''),
+      category?.id,
+    );
+    const relatedHtml = related.length
+      ? `\n<h2>Shuningdek o'qing</h2>\n<ul>${related
+          .map(
+            (r) =>
+              `<li><a href="/articles/${encodeURIComponent(r.slug)}">${escapeHtml(r.title)}</a></li>`,
+          )
+          .join('')}</ul>`
+      : '';
+    const content = `${html}${relatedHtml}
 <h2>Manbalar</h2>
 <ul>${items.join('')}</ul>
 <p><em>Maqola yuqoridagi manbalar asosida sun'iy intellekt yordamida tayyorlangan. Matn <a href="https://creativecommons.org/licenses/by-sa/4.0/deed.uz" target="_blank" rel="noopener">CC BY-SA 4.0</a> litsenziyasi ostida tarqatiladi.</em></p>`;
@@ -1245,9 +1446,16 @@ Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izo
     llm: Llm,
     sources: Source[],
     categories: string[],
+    /** Google'dagi qidiruv so'rovi — maqola aynan shunga javob bersin */
+    query?: string,
   ): Promise<DraftJson> {
     const big = llm.sourceBudget >= 20000;
     const style = big ? await this.styleSample() : '';
+    const seo = query
+      ? `
+Qidiruv maqsadi: odamlar Google'da "${query}" deb qidirmoqda — maqola shu so'rovga eng yaxshi javob bo'lsin. So'rovga aniq javobni dastlabki 2 paragrafda ber; so'rovni (yoki uning tabiiy o'zbekcha shaklini) sarlavhada, kirishda va kamida bitta <h2> da tabiiy ishlat. So'zni sun'iy takrorlama.
+`
+      : '';
 
     const writer = `Sen Bilim Manba (bilimmanba.uz) — o'zbek tilidagi ilmiy-ommabop jurnalning eng yaxshi muallifisan. Uslubing Quanta Magazine, Kurzgesagt kabi: jonli, aniq, o'quvchini oxirigacha olib boradigan.
 Senga bir mavzu bo'yicha bir nechta raqamlangan manba beriladi: Wikipedia maqolalari va (bo'lsa) arXiv'dagi yangi ilmiy ishlarning annotatsiyalari. Ulardagi faktlarni birlashtirib, o'zbek o'quvchisi uchun yangi, o'z so'zlaring bilan yozilgan bitta yaxlit maqola tayyorla.
@@ -1273,7 +1481,7 @@ Saytimizdagi o'quvchilar yoqtirgan maqoladan parcha — undan faqat ohang va usl
 """${style}"""
 `
     : ''
-}
+}${seo}
 ${FORMAT_RULES(categories)}`;
 
     const user = sources
@@ -1298,7 +1506,7 @@ ${UZ_RULES}
 
 ${VALUES_RULES}
 6. Sayt qadriyatlariga zid jumla yoki tafsilot bo'lsa — olib tashla yoki betaraf qilib qayta yoz.
-
+${seo}
 ${FORMAT_RULES(categories)}
 To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
 
@@ -1380,8 +1588,27 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
 
       const topics = await this.getTopics();
       const topic = topics[0];
+      // Navbat bo'sh: kunma-kun — Google qidiruv talabi, keyin bo'limlar navbati
+      let source: 'search' | undefined;
+      if (!topic) {
+        source =
+          (await this.getSetting('ai_next_source')) === 'rotation'
+            ? undefined
+            : 'search';
+        await this.setSetting(
+          'ai_next_source',
+          source === 'search' ? 'rotation' : 'search',
+        );
+      }
       try {
-        const article = await this.generate({ topic });
+        let article: Article;
+        try {
+          article = await this.generate({ topic, source });
+        } catch (err) {
+          // Qidiruvda yangi mavzu bo'lmasa — bugun bo'limlar navbatidan
+          if (!(err instanceof NoDemandTopicError)) throw err;
+          article = await this.generate({});
+        }
         await this.alerts.draftReady(article, true);
         if (topic)
           await this.setSetting('ai_topics', JSON.stringify(topics.slice(1)));

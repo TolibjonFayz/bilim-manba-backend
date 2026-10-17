@@ -24,6 +24,17 @@ const INSPECT =
 const OVERVIEW_TTL_MS = 3 * 60 * 60 * 1000;
 const INSPECT_TTL_MS = 24 * 60 * 60 * 1000;
 const DAY_MS = 24 * 60 * 60 * 1000;
+const DEMAND_TTL_MS = 12 * 60 * 60 * 1000;
+
+export interface DemandRow {
+  query: string;
+  impressions: number;
+  clicks: number;
+  /** Eng yaxshi o'rin (1 — eng tepada) */
+  position: number;
+  /** Shu o'rindagi sahifa yo'li, masalan /articles/qora-tuynuk */
+  page: string;
+}
 
 interface Row {
   keys?: string[];
@@ -276,6 +287,57 @@ export class SearchConsoleService {
     };
     this.overviewCache.set(days, { at: Date.now(), data });
     return data;
+  }
+
+  // ---------- Qidiruv talabi (AI mavzu tanlashi uchun) ----------
+
+  private demandCache?: { at: number; rows: DemandRow[] };
+
+  /**
+   * So'nggi `days` kundagi qidiruv so'rovlari: jami ko'rinish/klik va eng
+   * yaxshi o'rindagi sahifa. Sozlanmagan bo'lsa — bo'sh ro'yxat (xato emas).
+   */
+  async demand(days = 90): Promise<DemandRow[]> {
+    if (!this.configured) return [];
+    if (this.demandCache && Date.now() - this.demandCache.at < DEMAND_TTL_MS)
+      return this.demandCache.rows;
+    const site = await this.site();
+    const end = new Date(Date.now() - DAY_MS);
+    const start = new Date(end.getTime() - (days - 1) * DAY_MS);
+    const rows = await this.query(site, {
+      startDate: ymd(start),
+      endDate: ymd(end),
+      dimensions: ['query', 'page'],
+      rowLimit: 1000,
+    });
+    const byQuery = new Map<string, DemandRow>();
+    for (const r of rows) {
+      const [query = '', page = ''] = r.keys ?? [];
+      if (!query) continue;
+      const cur = byQuery.get(query);
+      const path = page.replace(/^https?:\/\/[^/]+/, '') || '/';
+      if (!cur) {
+        byQuery.set(query, {
+          query,
+          impressions: r.impressions,
+          clicks: r.clicks,
+          position: round(r.position),
+          page: path,
+        });
+        continue;
+      }
+      cur.impressions += r.impressions;
+      cur.clicks += r.clicks;
+      if (r.position < cur.position) {
+        cur.position = round(r.position);
+        cur.page = path;
+      }
+    }
+    const result = [...byQuery.values()].sort(
+      (a, b) => b.impressions - a.impressions,
+    );
+    this.demandCache = { at: Date.now(), rows: result };
+    return result;
   }
 
   // ---------- Indekslash holati ----------
