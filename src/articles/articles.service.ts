@@ -1,6 +1,7 @@
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { QuizService } from 'src/quiz/quiz.service';
 import { SeriesService } from 'src/series/series.service';
+import { SchoolService } from 'src/school/school.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { BookmarksService } from 'src/bookmarks/bookmarks.service';
 import { Category } from 'src/categories/models/category.model';
@@ -22,6 +23,7 @@ export class ArticlesService {
     private bookmarksService: BookmarksService,
     private quiz: QuizService,
     private series: SeriesService,
+    private school: SchoolService,
   ) {}
 
   // Faqat published maqolalar — oddiy userlar uchun
@@ -76,12 +78,20 @@ export class ArticlesService {
     }
 
     // Maqola oxiridagi test va seriya (bo'lmasa null) — alohida jadvallardan
-    const [quiz, series] = await Promise.all([
+    const [quiz, series, school] = await Promise.all([
       this.quiz.forArticle(article.id),
       this.series.forArticle(article.id),
+      this.school.forArticle(article.id),
     ]);
 
-    return { ...article.toJSON(), isLiked, isBookmarked, quiz, series };
+    return {
+      ...article.toJSON(),
+      isLiked,
+      isBookmarked,
+      quiz,
+      series,
+      school,
+    };
   }
 
   async recordView(slug: string, userId?: number) {

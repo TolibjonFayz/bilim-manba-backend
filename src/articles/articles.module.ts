@@ -10,6 +10,7 @@ import { ArticleView } from 'src/article-views/models/article-view.model';
 import { ArticleViewsModule } from 'src/article-views/article-views.module';
 import { QuizModule } from 'src/quiz/quiz.module';
 import { SeriesModule } from 'src/series/series.module';
+import { SchoolModule } from 'src/school/school.module';
 
 @Module({
   imports: [
@@ -19,6 +20,7 @@ import { SeriesModule } from 'src/series/series.module';
     BookmarksModule,
     QuizModule,
     SeriesModule,
+    SchoolModule,
   ],
   providers: [ArticlesService],
   controllers: [ArticlesController],

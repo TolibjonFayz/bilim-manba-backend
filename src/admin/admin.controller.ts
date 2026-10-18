@@ -130,7 +130,10 @@ export class AdminController {
     return this.drafts.startGenerate({
       topic: body?.topic,
       categoryId: body?.categoryId ? +body.categoryId : undefined,
-      source: body?.source === 'search' ? 'search' : undefined,
+      source:
+        body?.source === 'search' || body?.source === 'school'
+          ? body.source
+          : undefined,
       authorId: req.user?.userId,
     });
   }

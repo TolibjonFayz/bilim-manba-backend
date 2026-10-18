@@ -38,6 +38,7 @@ import {
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
 import { SeriesService } from '../series/series.service';
+import { SchoolService } from '../school/school.service';
 import {
   DemandRow,
   SearchConsoleService,
@@ -122,6 +123,16 @@ const DEFAULT_IMAGE_QUERIES = ['books library reading', 'open book warm light'];
 
 /** Google qidiruvida yangi mavzu topilmadi — kunlik rejim bo'limlar navbatiga o'tadi */
 class NoDemandTopicError extends ServiceUnavailableException {}
+/** Maktab navbatida mavzu qolmadi (AI ham taklif qila olmadi) */
+class NoSchoolTopicError extends ServiceUnavailableException {}
+
+type DraftSource = 'search' | 'school';
+/** Maktab maqolasi: fan, sinf va darslikdagi mavzu nomi */
+interface SchoolMeta {
+  subject: string | null;
+  grade: number | null;
+  title?: string;
+}
 
 const categoryQueries = (name?: string | null) =>
   CATEGORY_IMAGE_QUERIES[
@@ -241,6 +252,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     private readonly alerts: AdminAlertService,
     private readonly searchConsole: SearchConsoleService,
     private readonly series: SeriesService,
+    private readonly school: SchoolService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -259,7 +271,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     topic?: string;
     categoryId?: number;
     authorId?: number;
-    source?: 'search';
+    source?: DraftSource;
   }): DraftJob {
     if (this.job?.state === 'running') {
       throw new BadRequestException(
@@ -322,6 +334,62 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     setTimeout(() => void this.replaceCoverOnce(92), 90 * 1000).unref();
     // 2026-10-18: birinchi seriyalar — mavjud maqolalardan va yangi AI seriya
     setTimeout(() => void this.seriesKickoffOnce(), 3 * 60 * 1000).unref();
+    // 2026-10-18: /maktab — mavjud maqolalardan belgilash + mavzular navbati
+    setTimeout(() => void this.schoolKickoffOnce(), 6 * 60 * 1000).unref();
+  }
+
+  /** Bir marta: maktabga mos mavjud maqolalarni belgilash va mavzular navbati */
+  async schoolKickoffOnce() {
+    const key = 'once_school_kickoff_v1';
+    try {
+      if (await this.getSetting(key)) return;
+      await this.setSetting(key, new Date().toISOString());
+      const marked = await this.school.classifyExisting();
+      if (!(await this.school.queue()).length) await this.school.refill();
+      if (marked.length) {
+        await this.alerts.send(
+          `🎒 <b>/maktab sahifasi ishga tushdi</b>\n\nAI saytdagi ${marked.length} ta maqolani maktab o'quvchilari uchun belgiladi. Endi kunlik AI qoralama navbat bilan maktab mavzularini ham yozadi.`,
+          { text: "🎒 Ko'rish", path: '/maktab' },
+        );
+      }
+    } catch (err: any) {
+      this.logger.error(`Maktab bo'limini boshlashda xato: ${err?.message}`);
+    }
+  }
+
+  /**
+   * Maktab navbatidan mavzu: Wikipedia'da topilmasa yoki qoidaga mos kelmasa —
+   * keyingisi (ko'pi bilan 3 ta urinish).
+   */
+  private async schoolTopic(mainChars: number, llm: Llm) {
+    const categories = (await this.categoryModel.findAll({
+      attributes: ['id', 'name'],
+      raw: true,
+    })) as unknown as { id: number; name: string }[];
+    for (let i = 0; i < 3; i++) {
+      const t = await this.school.nextTopic();
+      if (!t) break;
+      let main: WikiSource;
+      try {
+        main = await findSource(t.topic, mainChars);
+      } catch {
+        continue;
+      }
+      const verdict = await this.checkTopic(main, llm);
+      if (!verdict.ok) continue;
+      const cat = categories.find(
+        (c) => c.name.toLowerCase() === t.subject.toLowerCase(),
+      );
+      this.logger.log(`Maktab mavzusi: ${t.title} (${t.grade ?? '?'}-sinf)`);
+      return {
+        main,
+        categoryId: cat?.id,
+        school: { subject: t.subject, grade: t.grade, title: t.title },
+      };
+    }
+    throw new NoSchoolTopicError(
+      "Maktab navbatida mos mavzu topilmadi. Birozdan keyin qayta urinib ko'ring.",
+    );
   }
 
   /** Bir marta: mavjud maqolalardan seriya yig'ish + birinchi avtomatik seriya */
@@ -505,9 +573,15 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     topic: string,
     categoryId: number | undefined,
     llm: Llm,
-    source?: 'search',
-  ): Promise<{ main: WikiSource; categoryId?: number; query?: string }> {
+    source?: DraftSource,
+  ): Promise<{
+    main: WikiSource;
+    categoryId?: number;
+    query?: string;
+    school?: SchoolMeta;
+  }> {
     const mainChars = llm.sourceBudget >= 20000 ? 14000 : 5500;
+    if (!topic && source === 'school') return this.schoolTopic(mainChars, llm);
     if (!topic && source === 'search') {
       const found = await this.demandTopic(mainChars, llm);
       if (found) return found;
@@ -887,8 +961,11 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
     topic?: string;
     categoryId?: number;
     authorId?: number;
-    /** Mavzusiz: 'search' — Google qidiruv talabidan, aks holda bo'limlar navbatidan */
-    source?: 'search';
+    /**
+     * 'search' — Google qidiruv talabidan (mavzusiz); 'school' — maktab o'quvchilari
+     * uchun (mavzusiz bo'lsa maktab navbatidan); aks holda bo'limlar navbatidan
+     */
+    source?: DraftSource;
   }) {
     const llm = this.getLlm();
     if (!llm) {
@@ -904,6 +981,10 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
       opts.source,
     );
     const sources = await this.gatherSources(picked.main, llm);
+    // Mavzu berilgan, lekin "maktab uchun" tanlangan — fan keyin bo'limdan olinadi
+    const school: SchoolMeta | undefined =
+      picked.school ??
+      (opts.source === 'school' ? { subject: null, grade: null } : undefined);
 
     // raw: Category modelida `name` class field — instance'da undefined bo'ladi
     const categories = (await this.categoryModel.findAll({
@@ -915,6 +996,7 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
       sources,
       categories.map((c) => c.name),
       picked.query,
+      school,
     );
 
     const title = normalize(draft.title ?? '').trim() || sources[0].title;
@@ -1013,6 +1095,13 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
     } as any);
     // Seriya rejasidan navbatga qo'yilgan mavzu bo'lsa — o'z qismiga biriktiriladi
     await this.series.attachQueued(topic, article.id);
+    if (school) {
+      await this.school.mark(
+        article.id,
+        school.subject ?? category?.name ?? 'Umumiy',
+        school.grade,
+      );
+    }
     this.logger.log(
       `AI qoralama yaratildi: ${slug} (${llm.name}; muqova: ${cover ? 'bor' : "yo'q"}; manbalar: ${used.map((u) => u.url).join(', ')})`,
     );
@@ -1531,12 +1620,23 @@ Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izo
     categories: string[],
     /** Google'dagi qidiruv so'rovi — maqola aynan shunga javob bersin */
     query?: string,
+    /** Maktab o'quvchilari uchun (fan, sinf, darslikdagi mavzu nomi) */
+    school?: SchoolMeta,
   ): Promise<DraftJson> {
     const big = llm.sourceBudget >= 20000;
     const style = big ? await this.styleSample() : '';
     const seo = query
       ? `
 Qidiruv maqsadi: odamlar Google'da "${query}" deb qidirmoqda — maqola shu so'rovga eng yaxshi javob bo'lsin. So'rovga aniq javobni dastlabki 2 paragrafda ber; so'rovni (yoki uning tabiiy o'zbekcha shaklini) sarlavhada, kirishda va kamida bitta <h2> da tabiiy ishlat. So'zni sun'iy takrorlama.
+`
+      : '';
+    const student = school
+      ? `
+O'quvchilar uchun: bu maqola maktab o'quvchilari${school.grade ? ` (taxminan ${school.grade}-sinf)` : ''} uchun${school.title ? ` — darslikdagi "${school.title}" mavzusini tushunishga yordam bersin` : ''}.
+- Sodda va aniq til; har bir atamani birinchi ishlatganda izohla; uzun murakkab gaplardan qoch.
+- Darslikdagi asosiy tushunchalar, ta'riflar va muhim sanalar/qonunlarni qamrab ol; misollar o'quvchi hayotidan bo'lsin.
+- Sarlavhada mavzu nomini${school.title ? ` ("${school.title}")` : ''} tabiiy ishlat — o'quvchi Google'dan shu nom bilan qidiradi.
+- Xulosadan keyin <h2>Asosiy fikrlar</h2> va <ul> ichida 4–6 ta qisqa punkt: o'quvchi esda saqlashi kerak bo'lgan eng muhim faktlar.
 `
       : '';
 
@@ -1564,7 +1664,7 @@ Saytimizdagi o'quvchilar yoqtirgan maqoladan parcha — undan faqat ohang va usl
 """${style}"""
 `
     : ''
-}${seo}
+}${seo}${student}
 ${FORMAT_RULES(categories)}`;
 
     const user = sources
@@ -1589,7 +1689,7 @@ ${UZ_RULES}
 
 ${VALUES_RULES}
 6. Sayt qadriyatlariga zid jumla yoki tafsilot bo'lsa — olib tashla yoki betaraf qilib qayta yoz.
-${seo}
+${seo}${student}
 ${FORMAT_RULES(categories)}
 To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
 
@@ -1677,16 +1777,21 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       }
       const topics = await this.getTopics();
       const topic = topics[0];
-      // Navbat bo'sh: kunma-kun — Google qidiruv talabi, keyin bo'limlar navbati
-      let source: 'search' | undefined;
+      // Navbat bo'sh: kunma-kun navbat bilan — Google qidiruv talabi → maktab
+      // mavzusi → bo'limlar navbati
+      let source: DraftSource | undefined;
       if (!topic) {
-        source =
-          (await this.getSetting('ai_next_source')) === 'rotation'
-            ? undefined
-            : 'search';
+        const cur = await this.getSetting('ai_next_source');
+        const now: 'search' | 'school' | 'rotation' =
+          cur === 'school' || cur === 'rotation' ? cur : 'search';
+        source = now === 'rotation' ? undefined : now;
         await this.setSetting(
           'ai_next_source',
-          source === 'search' ? 'rotation' : 'search',
+          now === 'search'
+            ? 'school'
+            : now === 'school'
+              ? 'rotation'
+              : 'search',
         );
       }
       try {
@@ -1694,8 +1799,12 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
         try {
           article = await this.generate({ topic, source });
         } catch (err) {
-          // Qidiruvda yangi mavzu bo'lmasa — bugun bo'limlar navbatidan
-          if (!(err instanceof NoDemandTopicError)) throw err;
+          // Qidiruvda yoki maktab navbatida mavzu bo'lmasa — bugun bo'limlar navbatidan
+          if (
+            !(err instanceof NoDemandTopicError) &&
+            !(err instanceof NoSchoolTopicError)
+          )
+            throw err;
           article = await this.generate({});
         }
         await this.alerts.draftReady(article, true);

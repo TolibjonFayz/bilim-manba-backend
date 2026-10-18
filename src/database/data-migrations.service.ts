@@ -62,6 +62,15 @@ export class DataMigrationsService implements OnModuleInit {
         "updatedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // Maktab o'quvchilari uchun maqolalar (SchoolService): fan va sinf
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS school_articles (
+        "articleId" INTEGER PRIMARY KEY,
+        subject VARCHAR(60) NOT NULL,
+        grade INTEGER,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
     // Maqolalar seriyasi (SeriesService): bir maqola — ko'pi bilan bitta seriyada
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS series (
