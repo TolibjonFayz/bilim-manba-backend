@@ -1,4 +1,9 @@
-import { Injectable, Logger } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  Logger,
+  NotFoundException,
+} from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/sequelize';
 import { QueryTypes } from 'sequelize';
@@ -104,7 +109,7 @@ export class SchoolService {
       `SELECT a.id, a.title, a.slug, a.excerpt, a."coverImage", a."createdAt",
               s.subject, s.grade
        FROM school_articles s JOIN articles a ON a.id = s."articleId"
-       WHERE a.status = 'published'
+       WHERE a.status = 'published' AND NOT s.hidden
        ORDER BY a."createdAt" DESC`,
     );
   }
@@ -113,7 +118,7 @@ export class SchoolService {
   async forArticle(articleId: number) {
     try {
       const [row] = await this.q<{ subject: string; grade: number | null }>(
-        'SELECT subject, grade FROM school_articles WHERE "articleId" = :id',
+        'SELECT subject, grade FROM school_articles WHERE "articleId" = :id AND NOT hidden',
         { id: articleId },
       );
       return row ?? null;
@@ -129,6 +134,58 @@ export class SchoolService {
        ON CONFLICT ("articleId") DO UPDATE SET subject = EXCLUDED.subject, grade = EXCLUDED.grade`,
       { id: articleId, subject: clean(subject, 60) || 'Umumiy', grade },
     );
+  }
+
+  // ---------- Admin ----------
+
+  /**
+   * Admin ro'yxati: belgilangan hamma maqolalar (yashirilganlari ham).
+   * Yashirilgani /maktab'da va maqoladagi belgida chiqmaydi, AI uni qayta
+   * belgilamaydi (qator saqlanadi).
+   */
+  async adminList() {
+    return this.q(
+      `SELECT a.id, a.title, a.slug, a.status, c.name AS category,
+              s.subject, s.grade, s.hidden, s."createdAt"
+       FROM school_articles s JOIN articles a ON a.id = s."articleId"
+       LEFT JOIN categories c ON c.id = a."categoryId"
+       ORDER BY s.hidden, a."createdAt" DESC`,
+    );
+  }
+
+  /** Admin: fan, sinf yoki yashirish/qaytarish; yangi maqola bo'lsa — qo'shadi */
+  async adminSave(
+    articleId: number,
+    body: { subject?: unknown; grade?: unknown; hidden?: unknown },
+  ) {
+    const [article] = await this.q<{ id: number }>(
+      'SELECT id FROM articles WHERE id = :id',
+      { id: articleId },
+    );
+    if (!article) throw new NotFoundException('Maqola topilmadi');
+    const [cur] = await this.q<{
+      subject: string;
+      grade: number | null;
+      hidden: boolean;
+    }>(
+      'SELECT subject, grade, hidden FROM school_articles WHERE "articleId" = :id',
+      { id: articleId },
+    );
+    const subject =
+      body.subject !== undefined ? clean(body.subject, 60) : cur?.subject;
+    if (!subject) throw new BadRequestException('Fan nomini kiriting');
+    const grade =
+      body.grade !== undefined ? gradeOf(body.grade) : (cur?.grade ?? null);
+    const hidden =
+      body.hidden !== undefined ? Boolean(body.hidden) : (cur?.hidden ?? false);
+    await this.exec(
+      `INSERT INTO school_articles ("articleId", subject, grade, hidden, "createdAt")
+       VALUES (:id, :subject, :grade, :hidden, now())
+       ON CONFLICT ("articleId") DO UPDATE
+         SET subject = EXCLUDED.subject, grade = EXCLUDED.grade, hidden = EXCLUDED.hidden`,
+      { id: articleId, subject, grade, hidden },
+    );
+    return { articleId, subject, grade, hidden };
   }
 
   // ---------- Maktab mavzulari navbati ----------

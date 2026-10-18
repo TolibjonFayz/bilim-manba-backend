@@ -23,6 +23,7 @@ import { Period, StatsService } from '../stats/stats.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
 import { SeriesService } from '../series/series.service';
+import { SchoolService } from '../school/school.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { memoryStorage } from 'multer';
 
@@ -38,6 +39,7 @@ export class AdminController {
     private searchConsole: SearchConsoleService,
     private alerts: AdminAlertService,
     private series: SeriesService,
+    private school: SchoolService,
   ) {}
 
   // Dashboard statistika
@@ -195,6 +197,21 @@ export class AdminController {
   @Post('series/:id/enqueue')
   seriesEnqueue(@Param('id') id: string, @Body() body: { parts?: unknown }) {
     return this.series.enqueue(+id, body?.parts);
+  }
+
+  // Maktab bo'limi: belgilangan maqolalar; fan/sinfni o'zgartirish,
+  // /maktab'dan olib tashlash (hidden) yoki qaytarish, yangi maqola qo'shish
+  @Get('school')
+  schoolList() {
+    return this.school.adminList();
+  }
+
+  @Put('school/:articleId')
+  schoolSave(
+    @Param('articleId') articleId: string,
+    @Body() body: { subject?: string; grade?: number | null; hidden?: boolean },
+  ) {
+    return this.school.adminSave(+articleId, body ?? {});
   }
 
   // Adminga shaxsiy Telegram xabarlari: holat, ulash, tekshirish, sinov, uzish

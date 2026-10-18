@@ -18,6 +18,7 @@ import { PublishingModule } from 'src/publishing/publishing.module';
 import { DraftsModule } from 'src/drafts/drafts.module';
 import { QuizModule } from 'src/quiz/quiz.module';
 import { SeriesModule } from 'src/series/series.module';
+import { SchoolModule } from 'src/school/school.module';
 import { StatsService } from 'src/stats/stats.service';
 
 @Module({
@@ -33,6 +34,7 @@ import { StatsService } from 'src/stats/stats.service';
     DraftsModule,
     QuizModule,
     SeriesModule,
+    SchoolModule,
   ],
   // SearchConsoleService — DraftsModule'dan (bitta nusxa, umumiy kesh)
   providers: [AdminService, StatsService],

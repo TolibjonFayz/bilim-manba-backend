@@ -71,6 +71,10 @@ export class DataMigrationsService implements OnModuleInit {
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // Admin /maktab'dan olib tashlagan maqola — qator qoladi, AI qayta belgilamaydi
+    await this.sequelize.query(
+      'ALTER TABLE school_articles ADD COLUMN IF NOT EXISTS hidden BOOLEAN NOT NULL DEFAULT false',
+    );
     // Maqolalar seriyasi (SeriesService): bir maqola — ko'pi bilan bitta seriyada
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS series (
