@@ -88,9 +88,20 @@ export class ArticlesController {
   }
 
   // Maqola oxiridagi testni tugatdi (hammaga ochiq): to'g'ri javoblar soni 0–3
+  // Token bo'lsa — test bali foydalanuvchiga yoziladi (reyting)
+  @UseGuards(OptionalJwtGuard)
   @Post('quiz-result/:slug')
-  quizResult(@Param('slug') slug: string, @Body() body: { correct?: number }) {
-    return this.articlesService.quizResult(slug, Number(body?.correct));
+  quizResult(
+    @Param('slug') slug: string,
+    @Body() body: { correct?: number; answers?: number[] },
+    @Request() req: any,
+  ) {
+    return this.articlesService.quizResult(
+      slug,
+      Number(body?.correct),
+      body?.answers,
+      req.user?.userId,
+    );
   }
 
   @Post('view/:slug')

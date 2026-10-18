@@ -47,8 +47,13 @@ export class ArticlesService {
     });
   }
 
-  quizResult(slug: string, correct: number) {
-    return this.quiz.recordResult(slug, correct);
+  quizResult(
+    slug: string,
+    correct: number,
+    answers?: unknown,
+    userId?: number,
+  ) {
+    return this.quiz.recordResult(slug, correct, answers, userId);
   }
 
   // Maqola slug bo'yicha qidirish

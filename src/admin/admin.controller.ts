@@ -150,6 +150,17 @@ export class AdminController {
   }
 
   // Muqovani xavfsiz tizim bilan qayta tanlash (AI)
+  // AI fakt-tekshiruvi: natija va qayta tekshirish (fonda; natija GET bilan)
+  @Get('articles/:id/fact-check')
+  factCheck(@Param('id') id: string) {
+    return this.drafts.factCheckStatus(+id);
+  }
+
+  @Post('articles/:id/fact-check')
+  factRecheck(@Param('id') id: string) {
+    return this.drafts.factRecheck(+id);
+  }
+
   @Post('articles/:id/cover/regenerate')
   regenerateCover(@Param('id') id: string) {
     return this.drafts.regenerateCover(+id);

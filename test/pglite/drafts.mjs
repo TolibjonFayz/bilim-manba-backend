@@ -59,6 +59,9 @@ const uploads = [];
 app.get(CloudflareService).uploadJson = async (obj, filename) => { uploads.push({ obj, filename }); return `https://r2.example/articles/${filename}`; };
 const coverUploads = [];
 app.get(CloudinaryService).uploadBuffer = async (buf, folder, id) => { coverUploads.push({ size: buf.length, folder, id }); return `https://res.cloudinary.com/demo/image/upload/${folder}/${id}.jpg`; };
+// Fakt-tekshiruv: alohida soxta model (Gemini fetch-soxtasiga aralashmasin)
+const factCalls = [];
+drafts.factCheck.llmOverride = { name: "fake", sourceBudget: 30000, json: async (sys, user) => { factCalls.push(user); return JSON.stringify({ issues: [] }); } };
 
 // Soxta Gemini: global fetch orqali (Gemini provayderining o'zi ham tekshiriladi)
 let demandReqs = [], relatedReqs = [], topicChecks = [], autoReqs = [], badTopicNext = false, groqCalls = [], geminiReqs = [], visionReqs = [], titleReqs = [], wikiDown = false, gem503 = 1, pexelsReqs = [], safetyReqs = [], safetyRejectFirst = false, rankFail = false, adultNext = false, emptyRanks = 0, broaderReqs = [];
@@ -356,6 +359,9 @@ if (!REAL) {
   check("bir martalik vazifa: bir marta ishlaydi", afterFirst === nv + 1 && visionReqs.length === afterFirst);
 }
 
+check("har qoralamadan keyin fakt-tekshiruv (manbalar + maqola matni)", factCalls.length > 0 && factCalls[0].includes("MANBALAR:") && factCalls[0].includes("MAQOLA:"), String(factCalls.length));
+const fcRow = (await db.query(`SELECT state FROM fact_checks LIMIT 1`)).rows[0];
+check("fakt-tekshiruv natijasi saqlandi", fcRow?.state === "done", JSON.stringify(fcRow));
 await app.close(); await server.stop();
 console.log(fails ? `\n${fails} ta test YIQILDI` : "\nHAMMASI O'TDI");
 process.exit(fails ? 1 : 0);

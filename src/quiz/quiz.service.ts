@@ -11,6 +11,7 @@ import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 import { Article, ArticleStatus } from '../articles/models/article.model';
 import { createLlm, Llm } from '../drafts/llm';
+import { QuizPointsService } from './quiz-points.service';
 
 export interface QuizQuestion {
   q: string;
@@ -118,6 +119,7 @@ export class QuizService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     @InjectModel(Article) private readonly articleModel: typeof Article,
     @InjectConnection() private readonly sequelize: Sequelize,
+    private readonly points: QuizPointsService,
   ) {}
 
   onModuleInit() {
@@ -260,20 +262,55 @@ Javob faqat JSON: {"questions": [{"q": "...", "options": ["...", "...", "...", "
     return done;
   }
 
-  /** O'quvchi testni tugatdi: urinishlar va to'g'ri javoblar yig'indisi */
-  async recordResult(slug: string, correct: number) {
-    const n = Math.round(Number(correct));
-    if (!Number.isFinite(n) || n < 0 || n > QUESTIONS) return { ok: false };
+  /**
+   * O'quvchi testni tugatdi: urinishlar va to'g'ri javoblar yig'indisi.
+   * answers (tanlangan variantlar) kelsa, to'g'ri javoblar soni serverda
+   * hisoblanadi; kirgan foydalanuvchiga shu asosda ball beriladi (har test
+   * uchun bir marta). answers'siz eski mijozlar — faqat statistika.
+   */
+  async recordResult(
+    slug: string,
+    correct: number,
+    answers?: unknown,
+    userId?: number,
+  ) {
     const article = await this.articleModel.findOne({
       where: { slug, status: ArticleStatus.PUBLISHED },
       attributes: ['id'],
     });
     if (!article) throw new NotFoundException('Maqola topilmadi');
+
+    let n = Math.round(Number(correct));
+    let total = QUESTIONS;
+    let verified = false;
+    if (Array.isArray(answers)) {
+      const questions = await this.forArticle(article.id);
+      if (
+        questions &&
+        answers.length === questions.length &&
+        answers.every((a) => Number.isInteger(a) && a >= 0 && a < 4)
+      ) {
+        n = questions.filter((q, i) => q.answer === answers[i]).length;
+        total = questions.length;
+        verified = true;
+      }
+    }
+    if (!Number.isFinite(n) || n < 0 || n > total) return { ok: false };
+
     await this.sequelize.query(
       `UPDATE article_quizzes SET attempts = attempts + 1, "correctTotal" = "correctTotal" + :n
        WHERE "articleId" = :id`,
       { replacements: { id: article.id, n } },
     );
-    return { ok: true };
+    if (!userId || !verified) return { ok: true, correct: n, total };
+
+    const { awarded, points } = await this.points.award(
+      userId,
+      article.id,
+      n,
+      total,
+    );
+    const week = await this.points.stats(userId, 'week');
+    return { ok: true, correct: n, total, awarded, points, week };
   }
 }

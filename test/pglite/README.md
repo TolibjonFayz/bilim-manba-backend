@@ -15,6 +15,8 @@ node test/pglite/run-all.mjs school quiz   # faqat tanlanganlar (build qilingan 
 | `drafts.mjs` | AI qoralama: mavzu tanlash, qiymatlar qoidasi, muqova, kunlik navbat |
 | `alerts.mjs` | Adminga shaxsiy Telegram xabarlari |
 | `quiz.mjs` | Maqola testlari va natijalar |
+| `quiz-points.mjs` | Test ballari va reyting |
+| `fact-check.mjs` | AI qoralamalar fakt-tekshiruvi |
 | `series.mjs` | Seriyalar, AI reja, avtomatik seriya |
 | `school.mjs` | /maktab bo'limi va admin boshqaruvi |
 | `stats.mjs` | Statistika va Search Console |

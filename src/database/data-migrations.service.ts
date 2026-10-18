@@ -106,6 +106,32 @@ export class DataMigrationsService implements OnModuleInit {
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // AI qoralamalar fakt-tekshiruvi (FactCheckService): shubhali joylar va manbalar matni
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS fact_checks (
+        "articleId" INTEGER PRIMARY KEY,
+        state VARCHAR(20) NOT NULL,
+        issues JSONB,
+        sources TEXT,
+        error TEXT,
+        "checkedAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
+    // Test ballari (QuizPointsService): har foydalanuvchiga har test uchun bir marta
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS quiz_scores (
+        "userId" INTEGER NOT NULL,
+        "articleId" INTEGER NOT NULL,
+        correct INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        points INTEGER NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY ("userId", "articleId")
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
+    );
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS data_migrations (
         id VARCHAR(255) PRIMARY KEY,

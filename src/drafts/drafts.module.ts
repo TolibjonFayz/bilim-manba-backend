@@ -8,6 +8,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 import { PublishingModule } from '../publishing/publishing.module';
 import { SeriesModule } from '../series/series.module';
 import { SchoolModule } from '../school/school.module';
+import { FactCheckService } from './fact-check.service';
 import { DraftsService } from './drafts.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 
@@ -21,7 +22,7 @@ import { SearchConsoleService } from '../search-console/search-console.service';
     SchoolModule,
   ],
   // Search Console shu yerda — AI mavzu tanlashda qidiruv talabidan foydalanadi
-  providers: [DraftsService, SearchConsoleService],
-  exports: [DraftsService, SearchConsoleService],
+  providers: [DraftsService, SearchConsoleService, FactCheckService],
+  exports: [DraftsService, SearchConsoleService, FactCheckService],
 })
 export class DraftsModule {}

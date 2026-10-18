@@ -39,6 +39,7 @@ import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
 import { SeriesService } from '../series/series.service';
 import { SchoolService } from '../school/school.service';
+import { FactCheckService } from './fact-check.service';
 import {
   DemandRow,
   SearchConsoleService,
@@ -218,6 +219,16 @@ export function slugify(title: string): string {
 const escapeHtml = (s: string) =>
   s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/"/g, '&quot;');
 
+/** Manbalar AI uchun: raqamlangan matn (yozish, muharrir va fakt-tekshiruv) */
+const sourcesText = (sources: Source[]) =>
+  sources
+    .map((src, i) =>
+      src.kind === 'wikipedia'
+        ? `[${i + 1}] Wikipedia (${src.lang}) — "${src.title}"\n${src.text}`
+        : `[${i + 1}] arXiv ilmiy ishi (${src.published}; ${src.authors.slice(0, 3).join(', ')}) — "${src.title}"\nAnnotatsiya: ${src.summary}`,
+    )
+    .join('\n\n---\n\n');
+
 /** Toshkent sanasi YYYY-MM-DD */
 const tashkentDay = (d = new Date()) =>
   new Date(d.getTime() + TASHKENT_OFFSET_MS).toISOString().slice(0, 10);
@@ -253,6 +264,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     private readonly searchConsole: SearchConsoleService,
     private readonly series: SeriesService,
     private readonly school: SchoolService,
+    private readonly factCheck: FactCheckService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -299,7 +311,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
           finishedAt: new Date().toISOString(),
         });
         // Yozish 5–10 daqiqa oladi — admin oynani yopgan bo'lishi mumkin
-        void this.alerts.draftReady(a, false);
+        void this.factCheck
+          .count(a.id)
+          .then((facts) => this.alerts.draftReady(a, false, facts));
       })
       .catch((err: any) => {
         Object.assign(job, {
@@ -1102,6 +1116,8 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
         school.grade,
       );
     }
+    // Fakt-tekshiruv: maqola manbalar bilan solishtiriladi (xato bo'lsa ham qoralama tayyor)
+    await this.factCheck.check(article.id, html, sourcesText(sources));
     this.logger.log(
       `AI qoralama yaratildi: ${slug} (${llm.name}; muqova: ${cover ? 'bor' : "yo'q"}; manbalar: ${used.map((u) => u.url).join(', ')})`,
     );
@@ -1127,6 +1143,20 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
    * nom bilan — eski fayl ustidan yoziladi), "Manbalar"dagi muallif qatori
    * yangilanadi.
    */
+  /** Admin: fakt-tekshiruv natijasi / qayta tekshirish (joriy matn bilan) */
+  factCheckStatus(articleId: number) {
+    return this.factCheck.get(articleId);
+  }
+
+  async factRecheck(articleId: number) {
+    const article = await this.articleModel.findByPk(articleId, {
+      attributes: ['id', 'content'],
+      raw: true,
+    });
+    if (!article) throw new BadRequestException('Maqola topilmadi');
+    return this.factCheck.recheck(articleId, (article as any).content);
+  }
+
   async regenerateCover(articleId: number) {
     const llm = this.getLlm();
     if (!llm) {
@@ -1667,13 +1697,7 @@ Saytimizdagi o'quvchilar yoqtirgan maqoladan parcha — undan faqat ohang va usl
 }${seo}${student}
 ${FORMAT_RULES(categories)}`;
 
-    const user = sources
-      .map((src, i) =>
-        src.kind === 'wikipedia'
-          ? `[${i + 1}] Wikipedia (${src.lang}) — "${src.title}"\n${src.text}`
-          : `[${i + 1}] arXiv ilmiy ishi (${src.published}; ${src.authors.slice(0, 3).join(', ')}) — "${src.title}"\nAnnotatsiya: ${src.summary}`,
-      )
-      .join('\n\n---\n\n');
+    const user = sourcesText(sources);
 
     const draft = await this.callJson(llm, writer, user, 'yozish');
     if (!big) return draft;
@@ -1807,7 +1831,11 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
             throw err;
           article = await this.generate({});
         }
-        await this.alerts.draftReady(article, true);
+        await this.alerts.draftReady(
+          article,
+          true,
+          await this.factCheck.count(article.id),
+        );
         if (topic) await this.removeTopic(topic);
         await this.setSetting('ai_last_error', '');
         return 'done';

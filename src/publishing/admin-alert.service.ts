@@ -192,9 +192,20 @@ export class AdminAlertService {
     }
   }
 
-  draftReady(a: { id?: number; title: string }, daily: boolean) {
+  draftReady(
+    a: { id?: number; title: string },
+    daily: boolean,
+    /** Fakt-tekshiruvdagi shubhali joylar soni (null — tekshirilmagan) */
+    facts?: number | null,
+  ) {
+    const check =
+      facts === null || facts === undefined
+        ? ''
+        : facts
+          ? `\n\n🔍 Fakt-tekshiruv: <b>${facts} ta shubhali joy</b> — ko'rish sahifasida sariq bilan belgilangan.`
+          : '\n\n✅ Fakt-tekshiruv: shubhali joy topilmadi.';
     return this.send(
-      `✍️ <b>${daily ? 'Kunlik' : 'Yangi'} AI qoralama tayyor</b>\n\n${esc(a.title)}\n\nO'qib chiqing va chop eting yoki vaqtini belgilang.`,
+      `✍️ <b>${daily ? 'Kunlik' : 'Yangi'} AI qoralama tayyor</b>\n\n${esc(a.title)}${check}\n\nO'qib chiqing va chop eting yoki vaqtini belgilang.`,
       { text: "👀 Ko'rib chiqish", path: `/admin/articles/${a.id}/preview` },
     );
   }
