@@ -49,6 +49,8 @@ export const AI_SOURCE = 'Bilim Manba AI';
 const LEGACY_AI_SOURCE = 'Wikipedia (Bilim Manba AI)';
 // Ko'rib chiqilmagan AI qoralamalari shundan ko'p bo'lsa, kunlik qoralama yozilmaydi
 const MAX_PENDING = 3;
+// Avtomatik yangi seriya shuncha kunda bir marta (oldingisi navbatda tugagach)
+const AUTO_SERIES_EVERY_DAYS = 10;
 // Qidiruv so'rovi yangi maqolaga arzishi uchun 90 kunda kamida shuncha ko'rinish
 const DEMAND_MIN_IMPRESSIONS = 5;
 // Kunlik qoralama Toshkent vaqti bilan shu soatdan keyin yoziladi
@@ -318,6 +320,61 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     // 2026-10-14: 92-qoralamaga 18+ muqova tushgan edi (xavfsizlik filtrlaridan
     // oldin) — deploy'dan keyin bir marta olib tashlanib, yangisi tanlanadi
     setTimeout(() => void this.replaceCoverOnce(92), 90 * 1000).unref();
+    // 2026-10-18: birinchi seriyalar — mavjud maqolalardan va yangi AI seriya
+    setTimeout(() => void this.seriesKickoffOnce(), 3 * 60 * 1000).unref();
+  }
+
+  /** Bir marta: mavjud maqolalardan seriya yig'ish + birinchi avtomatik seriya */
+  async seriesKickoffOnce() {
+    const key = 'once_series_kickoff_v1';
+    try {
+      if (await this.getSetting(key)) return;
+      await this.setSetting(key, new Date().toISOString());
+      await this.seriesFromExisting();
+      await this.maybeAutoSeries(true);
+    } catch (err: any) {
+      this.logger.error(`Seriyalarni boshlashda xato: ${err?.message}`);
+    }
+  }
+
+  /** AI mavjud maqolalardan seriya yig'adi (admin tugmasi ham shuni chaqiradi) */
+  async seriesFromExisting() {
+    const created = await this.series.groupExisting();
+    for (const s of created) {
+      await this.alerts.send(
+        `📚 <b>Yangi seriya</b>: «${s.title.replace(/[<>&]/g, '')}»\n\nAI saytdagi ${s.parts} ta maqolani bitta seriyaga yig'di — o'quvchilar ularni qism-qism o'qiydi.`,
+        { text: "📚 Seriyani ko'rish", path: `/series/${s.slug}` },
+      );
+    }
+    return created;
+  }
+
+  /**
+   * Avtomatik yangi seriya: o'chirilmagan bo'lsa, oldingi seriya qismlari
+   * navbatda tugagan va oxirgisidan beri AUTO_SERIES_EVERY_DAYS kun o'tgan
+   * bo'lsa — AI yangi seriya o'ylab topib, qismlarini navbatga qo'yadi.
+   * force — kunni kutmaydi (admin tugmasi, birinchi ishga tushirish).
+   */
+  async maybeAutoSeries(force = false) {
+    if ((await this.getSetting('ai_auto_series')) === 'off' && !force)
+      return null;
+    if (await this.series.hasQueued()) return null;
+    const last = await this.getSetting('series_last_auto');
+    if (
+      !force &&
+      last &&
+      Date.now() - new Date(last).getTime() <
+        AUTO_SERIES_EVERY_DAYS * 24 * 60 * 60 * 1000
+    )
+      return null;
+    const created = await this.series.autoNew();
+    if (!created) return null;
+    await this.setSetting('series_last_auto', new Date().toISOString());
+    await this.alerts.send(
+      `📚 <b>Yangi seriya rejalashtirildi</b>: «${created.title.replace(/[<>&]/g, '')}»\n\n${created.parts.length} qism kunlik AI navbatiga qo'yildi — har kuni bittadan qoralama yoziladi:\n${created.parts.map((p, i) => `${i + 1}. ${p.title.replace(/[<>&]/g, '')}`).join('\n')}`,
+      { text: '📚 Seriyalar', path: '/admin/series' },
+    );
+    return created;
   }
 
   /** Bir marta bajariladi (app_settings belgisi) — qayta ishga tushganda takrorlanmaydi */
@@ -369,6 +426,17 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /**
+   * Navbatdan bitta mavzuni olib tashlaydi — ro'yxat qaytadan o'qiladi, shuning
+   * uchun yozish davomida qo'shilgan mavzular (masalan, yangi seriya) yo'qolmaydi.
+   */
+  private async removeTopic(topic: string) {
+    const list = await this.getTopics();
+    const i = list.findIndex((t) => t === topic);
+    if (i >= 0) list.splice(i, 1);
+    await this.setSetting('ai_topics', JSON.stringify(list));
+  }
+
   private pendingCount() {
     return this.articleModel.count({
       where: {
@@ -380,13 +448,15 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   }
 
   async getSettings() {
-    const [daily, topics, lastRun, lastError, pending] = await Promise.all([
-      this.getSetting('ai_daily'),
-      this.getTopics(),
-      this.getSetting('ai_last_run'),
-      this.getSetting('ai_last_error'),
-      this.pendingCount(),
-    ]);
+    const [daily, topics, lastRun, lastError, pending, autoSeries] =
+      await Promise.all([
+        this.getSetting('ai_daily'),
+        this.getTopics(),
+        this.getSetting('ai_last_run'),
+        this.getSetting('ai_last_error'),
+        this.pendingCount(),
+        this.getSetting('ai_auto_series'),
+      ]);
     return {
       configured: Boolean(this.getLlm()),
       model: this.getLlm()?.name ?? null,
@@ -397,12 +467,21 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       lastRun,
       lastError: lastError || null,
       pending,
+      autoSeries: autoSeries !== 'off',
+      autoSeriesEveryDays: AUTO_SERIES_EVERY_DAYS,
     };
   }
 
-  async updateSettings(dto: { daily?: boolean; topics?: unknown }) {
+  async updateSettings(dto: {
+    daily?: boolean;
+    topics?: unknown;
+    autoSeries?: boolean;
+  }) {
     if (typeof dto?.daily === 'boolean') {
       await this.setSetting('ai_daily', dto.daily ? 'on' : 'off');
+    }
+    if (typeof dto?.autoSeries === 'boolean') {
+      await this.setSetting('ai_auto_series', dto.autoSeries ? 'on' : 'off');
     }
     if (Array.isArray(dto?.topics)) {
       const topics = dto.topics
@@ -1590,6 +1669,12 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
         return 'skipped';
       }
 
+      // Oldingi seriya tugagan bo'lsa — vaqti kelganda yangisi navbatga qo'yiladi
+      try {
+        await this.maybeAutoSeries();
+      } catch (err: any) {
+        this.logger.warn(`Avtomatik seriya: ${err?.message}`);
+      }
       const topics = await this.getTopics();
       const topic = topics[0];
       // Navbat bo'sh: kunma-kun — Google qidiruv talabi, keyin bo'limlar navbati
@@ -1614,8 +1699,7 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
           article = await this.generate({});
         }
         await this.alerts.draftReady(article, true);
-        if (topic)
-          await this.setSetting('ai_topics', JSON.stringify(topics.slice(1)));
+        if (topic) await this.removeTopic(topic);
         await this.setSetting('ai_last_error', '');
         return 'done';
       } catch (err: any) {
@@ -1630,7 +1714,7 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
         );
         // Topilmagan mavzu navbatni to'sib qo'ymasin
         if (topic && err instanceof BadRequestException) {
-          await this.setSetting('ai_topics', JSON.stringify(topics.slice(1)));
+          await this.removeTopic(topic);
         }
         return 'failed';
       }

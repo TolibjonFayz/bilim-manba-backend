@@ -30,6 +30,8 @@ interface QueuedPart {
 }
 
 const QUEUE_KEY = 'series_queue';
+// Avtomatik yangi seriya qismlari soni
+const AUTO_PARTS = 4;
 
 const slugify = (s: string) =>
   String(s ?? '')
@@ -416,6 +418,175 @@ ${existing.length ? `Seriyada allaqachon bor qismlar (takrorlama, davomini rejal
     await this.setSetting('ai_topics', JSON.stringify(topics.slice(0, 100)));
     await this.setSetting(QUEUE_KEY, JSON.stringify(queue));
     return { topics, added: list.length };
+  }
+
+  /** Navbatda hali yozilmagan seriya qismi bormi (seriya davom etyapti) */
+  async hasQueued(): Promise<boolean> {
+    const [queue, topics] = await Promise.all([
+      this.queue(),
+      this.queueTopics(),
+    ]);
+    return Object.keys(queue).some((t) => topics.has(t));
+  }
+
+  // ---------- Avtomatik seriyalar ----------
+
+  private async siteContext() {
+    const [series, categories, recent] = await Promise.all([
+      this.q<{ title: string }>('SELECT title FROM series'),
+      this.q<{ name: string }>('SELECT name FROM categories ORDER BY id'),
+      this.q<{ title: string }>(
+        `SELECT title FROM articles ORDER BY "createdAt" DESC LIMIT 120`,
+      ),
+    ]);
+    return { series, categories, recent };
+  }
+
+  /**
+   * AI o'zi yangi seriya mavzusini o'ylab topadi, seriyani yaratadi, qismlarini
+   * rejalashtiradi va kunlik navbatga qo'yadi. Wikipedia'da topilgan qism 3 tadan
+   * kam bo'lsa — seriya bekor qilinadi (null).
+   */
+  async autoNew(partsCount = AUTO_PARTS) {
+    const llm = this.getLlm();
+    if (!llm) return null;
+    const { series, categories, recent } = await this.siteContext();
+    let idea: { title: string; description: string };
+    try {
+      const raw = await llm.json(
+        `Sen Bilim Manba (o'zbek tilidagi ilmiy-ommabop sayt) bosh muharririsan. O'quvchilar qism-qism kuzatib boradigan yangi maqolalar SERIYASI mavzusini tanla.
+Talablar:
+- Qiziqarli, keng auditoriyaga (o'quvchilar, talabalar, oilalar) mo'ljallangan, ${partsCount} ta alohida qismga bo'linadigan mavzu (masalan: "Koinot sirlari", "Buyuk ixtirolar tarixi", "Kino qanday yaratiladi", "Inson tanasi mo'jizalari").
+- Saytdagi bo'limlardan biriga mos: ${categories.map((c) => c.name).join(', ')}.
+- Mavjud seriyalarni va saytda ko'p yozilgan mavzularni takrorlama.
+- Musulmon oila o'quvchisiga mos: 18+, spirtli ichimlik, qimor, okkultizm, LGBT, dinni tanqid qilish mavzulari bo'lmasin.
+Mavjud seriyalar:
+${series.map((s) => `- ${s.title}`).join('\n') || "- (hali yo'q)"}
+Saytdagi so'nggi maqolalar:
+${recent.map((a) => `- ${a.title}`).join('\n')}
+Javob faqat JSON: {"title": "seriya nomi (50 belgigacha)", "description": "bir gaplik qiziqarli tavsif (160 belgigacha)"}`,
+        'Yangi seriya',
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      idea = {
+        title: clean(j?.title, 80),
+        description: clean(j?.description, 300),
+      };
+    } catch (err: any) {
+      this.logger.warn(`Yangi seriya mavzusi tanlanmadi: ${err?.message}`);
+      return null;
+    }
+    if (!idea.title) return null;
+    const created = await this.create(idea);
+    try {
+      const { parts } = await this.plan(created.id, partsCount);
+      const found = parts.filter((p) => p.found);
+      if (found.length < 3) {
+        await this.remove(created.id);
+        this.logger.warn(
+          `Seriya bekor qilindi (Wikipedia'da ${found.length} ta qism topildi): ${idea.title}`,
+        );
+        return null;
+      }
+      await this.enqueue(created.id, found);
+      this.logger.log(
+        `Yangi seriya rejalashtirildi: ${idea.title} (${found.length} qism)`,
+      );
+      return { ...created, parts: found };
+    } catch (err: any) {
+      await this.remove(created.id);
+      this.logger.warn(`Seriya rejasi tuzilmadi: ${err?.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Saytdagi chop etilgan (seriyasiz) maqolalardan tabiiy ketma-ketlik hosil
+   * qiladiganlarini AI topib, seriyaga yig'adi. Majburlamaydi — mos guruh
+   * bo'lmasa hech narsa yaratilmaydi.
+   */
+  async groupExisting(maxGroups = 2) {
+    const llm = this.getLlm();
+    if (!llm) return [];
+    const pool = await this.q<{
+      id: number;
+      title: string;
+      excerpt: string | null;
+      category: string | null;
+    }>(
+      `SELECT a.id, a.title, a.excerpt, c.name AS category FROM articles a
+       LEFT JOIN categories c ON c.id = a."categoryId"
+       LEFT JOIN series_articles sa ON sa."articleId" = a.id
+       WHERE a.status = 'published' AND sa."articleId" IS NULL
+       ORDER BY a."createdAt" DESC LIMIT 200`,
+    );
+    if (pool.length < 3) return [];
+    let groups: { title: string; description: string; numbers: number[] }[] =
+      [];
+    try {
+      const raw = await llm.json(
+        `Sen Bilim Manba (o'zbek tilidagi ilmiy-ommabop sayt) bosh muharririsan. Saytdagi mavjud maqolalardan SERIYA tuzasan: ketma-ket o'qilsa mantiqiy bir butun bo'ladigan 3–5 ta maqola guruhi (bitta chuqur mavzu, oddiydan murakkabga yoki xronologik tartib).
+Eng ko'pi ${maxGroups} ta guruh. Majburlama: mavzular faqat bir-biriga yaqin bo'lsa yetmaydi — o'quvchi 1-qismdan keyin 2-qismni o'qishni xohlaydigan ketma-ketlik bo'lsin. Mos guruh bo'lmasa — bo'sh ro'yxat. Bir maqola faqat bitta guruhda.
+Har guruh uchun: o'zbekcha seriya nomi (50 belgigacha), bir gaplik tavsif va maqolalar raqamlari o'qish tartibida.
+Javob faqat JSON: {"groups": [{"title": "...", "description": "...", "numbers": [n, ...]}]}`,
+        pool
+          .map(
+            (a, i) =>
+              `${i}) [${a.category ?? '-'}] ${a.title} — ${String(a.excerpt ?? '').slice(0, 140)}`,
+          )
+          .join('\n'),
+      );
+      const j = JSON.parse(
+        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
+      );
+      groups = (Array.isArray(j?.groups) ? j.groups : []).map((g: any) => ({
+        title: clean(g?.title, 80),
+        description: clean(g?.description, 300),
+        numbers: (Array.isArray(g?.numbers) ? g.numbers : []).map(Number),
+      }));
+    } catch (err: any) {
+      this.logger.warn(`Mavjud maqolalardan seriya tuzilmadi: ${err?.message}`);
+      return [];
+    }
+    const used = new Set<number>();
+    const created: {
+      id: number;
+      title: string;
+      slug: string;
+      parts: number;
+    }[] = [];
+    for (const g of groups.slice(0, maxGroups)) {
+      const ids = [
+        ...new Set(
+          g.numbers.filter(
+            (n) => Number.isInteger(n) && pool[n] && !used.has(n),
+          ),
+        ),
+      ]
+        .slice(0, 5)
+        .map((n) => {
+          used.add(n);
+          return pool[n].id;
+        });
+      if (!g.title || ids.length < 3) continue;
+      const s = await this.create({
+        title: g.title,
+        description: g.description,
+      });
+      await this.update(s.id, { articleIds: ids });
+      created.push({
+        id: s.id,
+        title: s.title,
+        slug: s.slug,
+        parts: ids.length,
+      });
+      this.logger.log(
+        `Mavjud maqolalardan seriya: ${s.title} (${ids.length} qism)`,
+      );
+    }
+    return created;
   }
 
   /** AI qoralama yozildi: mavzu seriya navbatida bo'lsa — seriyaga biriktiriladi */

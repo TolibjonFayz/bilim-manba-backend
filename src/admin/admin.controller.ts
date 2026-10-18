@@ -173,6 +173,17 @@ export class AdminController {
     return this.series.remove(+id);
   }
 
+  // AI: mavjud maqolalardan seriya yig'ish / yangi seriya boshlash (darhol)
+  @Post('series/auto/existing')
+  seriesAutoExisting() {
+    return this.drafts.seriesFromExisting();
+  }
+
+  @Post('series/auto/new')
+  async seriesAutoNew() {
+    return { created: await this.drafts.maybeAutoSeries(true) };
+  }
+
   @Post('series/:id/plan')
   seriesPlan(@Param('id') id: string, @Body() body: { parts?: number }) {
     return this.series.plan(+id, Number(body?.parts) || 4);
@@ -220,7 +231,9 @@ export class AdminController {
   }
 
   @Put('drafts/settings')
-  updateDraftSettings(@Body() body: { daily?: boolean; topics?: string[] }) {
+  updateDraftSettings(
+    @Body() body: { daily?: boolean; topics?: string[]; autoSeries?: boolean },
+  ) {
     return this.drafts.updateSettings(body);
   }
 
