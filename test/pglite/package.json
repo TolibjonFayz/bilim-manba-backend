@@ -1,0 +1,16 @@
+{
+  "name": "bilim-manba-pglite-tests",
+  "version": "1.0.0",
+  "description": "Integratsion testlar: PGlite (Postgres) + Nest moduli",
+  "main": "index.js",
+  "scripts": {
+    "test": "echo \"Error: no test specified\" && exit 1"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "dependencies": {
+    "@electric-sql/pglite": "^0.5.8",
+    "@electric-sql/pglite-socket": "^0.2.11"
+  }
+}

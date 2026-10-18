@@ -42,14 +42,19 @@ export class TelegramService {
     ).replace(/\/$/, '');
   }
 
+  /** Kanal (@username yoki -100…) — sendPoll kabi boshqa usullar uchun */
+  get channelId() {
+    return this.channel;
+  }
+
   get configured(): boolean {
     return Boolean(this.token && this.channel);
   }
 
-  articleUrl(slug: string) {
+  articleUrl(slug: string, medium = 'channel') {
     // utm — Google Analytics'da Telegram'dan kelganlar alohida ko'rinsin
-    // (canonical query'siz, SEO'ga ta'sir qilmaydi)
-    return `${this.siteUrl}/articles/${slug}?utm_source=telegram&utm_medium=channel`;
+    // (canonical query'siz, SEO'ga ta'sir qilmaydi); "Kun savoli" — medium=quiz
+    return `${this.siteUrl}/articles/${slug}?utm_source=telegram&utm_medium=${medium}`;
   }
 
   /**
@@ -57,8 +62,8 @@ export class TelegramService {
    * maqola Telegram ichida bir zumda ochiladi (shablon instantview.telegram.org
    * da yaratiladi, rhash o'sha yerdan olinadi; shablon: docs/instant-view.txt).
    */
-  readUrl(slug: string) {
-    const url = this.articleUrl(slug);
+  readUrl(slug: string, medium?: string) {
+    const url = this.articleUrl(slug, medium);
     const rhash = this.config.get<string>('TELEGRAM_IV_RHASH')?.trim();
     return rhash
       ? `https://t.me/iv?url=${encodeURIComponent(url)}&rhash=${encodeURIComponent(rhash)}`

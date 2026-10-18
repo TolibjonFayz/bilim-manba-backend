@@ -13,6 +13,7 @@ import {
   Query,
   StreamableFile,
   Header,
+  BadRequestException,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -22,6 +23,7 @@ import { DraftsService } from '../drafts/drafts.service';
 import { Period, StatsService } from '../stats/stats.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
+import { ChannelQuizService } from '../publishing/channel-quiz.service';
 import { SeriesService } from '../series/series.service';
 import { SchoolService } from '../school/school.service';
 import { FileInterceptor } from '@nestjs/platform-express';
@@ -40,6 +42,7 @@ export class AdminController {
     private alerts: AdminAlertService,
     private series: SeriesService,
     private school: SchoolService,
+    private channelQuiz: ChannelQuizService,
   ) {}
 
   // Dashboard statistika
@@ -197,6 +200,26 @@ export class AdminController {
   @Post('series/:id/enqueue')
   seriesEnqueue(@Param('id') id: string, @Body() body: { parts?: unknown }) {
     return this.series.enqueue(+id, body?.parts);
+  }
+
+  // Telegram kanalda "Kun savoli": holat, sozlash (yoqish, soat), hozir yuborish
+  @Get('channel-quiz')
+  channelQuizStatus() {
+    return this.channelQuiz.status();
+  }
+
+  @Put('channel-quiz')
+  channelQuizUpdate(@Body() body: { enabled?: boolean; hour?: number }) {
+    return this.channelQuiz.update(body ?? {});
+  }
+
+  @Post('channel-quiz/send')
+  async channelQuizSend() {
+    try {
+      return await this.channelQuiz.sendNow();
+    } catch (err: any) {
+      throw new BadRequestException(err?.message ?? 'Yuborilmadi');
+    }
   }
 
   // Maktab bo'limi: belgilangan maqolalar; fan/sinfni o'zgartirish,
