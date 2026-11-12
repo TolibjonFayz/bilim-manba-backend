@@ -66,6 +66,9 @@ drafts.factCheck.llmOverride = { name: "fake", sourceBudget: 30000, json: async 
 // Soxta Gemini: global fetch orqali (Gemini provayderining o'zi ham tekshiriladi)
 let demandReqs = [], relatedReqs = [], topicChecks = [], autoReqs = [], badTopicNext = false, groqCalls = [], geminiReqs = [], visionReqs = [], titleReqs = [], wikiDown = false, gem503 = 1, pexelsReqs = [], safetyReqs = [], safetyRejectFirst = false, rankFail = false, adultNext = false, emptyRanks = 0, broaderReqs = [];
 const gem = (obj) => new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: JSON.stringify(obj) }] } }] }), { status: 200, headers: { "content-type": "application/json" } });
+// Hamma soxta rasm so'rovlariga beriladigan haqiqiy JPEG (1600x900)
+// (shovqinli — haqiqiy suratdek bir necha yuz KB chiqadi)
+const TEST_JPEG = await require("sharp")({ create: { width: 1600, height: 900, channels: 3, background: { r: 20, g: 30, b: 60 }, noise: { type: "gaussian", mean: 128, sigma: 40 } } }).jpeg().toBuffer();
 if (!REAL) {
   const realFetch = globalThis.fetch;
   globalThis.fetch = async (url, init) => {
@@ -76,6 +79,20 @@ if (!REAL) {
       pexelsReqs.push({ url: String(url), auth: init?.headers?.Authorization });
       const img = "https://upload.wikimedia.org/wikipedia/commons/thumb/c/cf/Black_hole_-_Messier_87.jpg/1280px-Black_hole_-_Messier_87.jpg";
       return new Response(JSON.stringify({ photos: [1, 2].map((i) => ({ id: i, url: `https://www.pexels.com/photo/${i}/`, photographer: `Fotograf ${i}`, alt: `Pexels qora tuynuk ${i}`, src: { large2x: img + "?p=" + i, medium: img.replace("1280px", "500px") + "?p=" + i } })) }), { headers: { "content-type": "application/json" } });
+    }
+    // Rasm bazalari va rasm fayllari — soxta javob: haqiqiy Openverse/NASA/Wikimedia
+    // ba'zan javob bermay (yoki 429 berib) testni tasodifiy yiqitardi
+    const qSlug = (u) => (new URL(String(u)).searchParams.get("q") || "x").toLowerCase().replace(/[^a-z0-9]+/g, "-").slice(0, 40);
+    if (String(url).startsWith("https://api.openverse.org/")) {
+      const q = qSlug(url);
+      return new Response(JSON.stringify({ results: [1, 2].map((i) => ({ id: `ov-${q}-${i}`, title: `Openverse ${q} ${i}`, creator: `Muallif ${i}`, license: "by-sa", license_version: "4.0", url: `https://img.test/ov-${q}-${i}.jpg`, thumbnail: `https://img.test/ov-${q}-${i}-thumb.jpg`, foreign_landing_url: `https://example.org/ov/${q}/${i}`, width: 1600, height: 900, filetype: "jpg", source: "flickr", mature: false, tags: [{ name: "space" }] })) }), { headers: { "content-type": "application/json" } });
+    }
+    if (String(url).startsWith("https://images-api.nasa.gov/")) {
+      const q = qSlug(url);
+      return new Response(JSON.stringify({ collection: { items: [1, 2].map((i) => ({ data: [{ nasa_id: `T-${q}-${i}`, title: `NASA ${q} ${i}`, description: "Space image", keywords: ["space"], center: "JPL" }], links: [{ href: `https://img.test/nasa-${q}-${i}-thumb.jpg` }] })) } }), { headers: { "content-type": "application/json" } });
+    }
+    if (/^https:\/\/(img\.test|images-assets\.nasa\.gov|upload\.wikimedia\.org)\//.test(String(url))) {
+      return new Response(TEST_JPEG, { headers: { "content-type": "image/jpeg", "content-length": String(TEST_JPEG.length) } });
     }
     if (!String(url).startsWith("https://generativelanguage.googleapis.com/")) return realFetch(url, init);
     if (gem503 > 0) { gem503--; geminiReqs.push({ url: String(url), status: 503 }); return new Response(JSON.stringify({ error: { message: "This model is currently experiencing high demand." } }), { status: 503, headers: { "content-type": "application/json" } }); }

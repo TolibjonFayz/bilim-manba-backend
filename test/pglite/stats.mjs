@@ -30,6 +30,8 @@ const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 20
 const creds = { client_email: "bilim@proj.iam.gserviceaccount.com", private_key: privateKey.export({ type: "pkcs8", format: "pem" }) };
 const google = { token: 0, sites: 0, query: [], sitemaps: 0, inspect: [], jwtOk: null };
 const J = (o, s = 200) => new Response(JSON.stringify(o), { status: s, headers: { "content-type": "application/json" } });
+// Oldingi davr so'rovi: joriy 28 kundan oldingi oyna (sana bugungi kunga nisbatan — test vaqt o'tsa eskirmasin)
+const PREV_CUTOFF = new Date(Date.now() - 40 * 86400000).toISOString().slice(0, 10);
 const realFetch = globalThis.fetch;
 globalThis.fetch = async (url, init) => {
   const u = String(url);
@@ -48,7 +50,7 @@ globalThis.fetch = async (url, init) => {
     if (u.includes("/searchAnalytics/query")) {
       const b = JSON.parse(init.body); google.query.push({ url: u, body: b });
       const dim = b.dimensions?.[0];
-      if (!dim) return J({ rows: [{ clicks: b.startDate < "2026-09-01" ? 50 : 80, impressions: 4000, ctr: 0.02, position: 12.34 }] });
+      if (!dim) return J({ rows: [{ clicks: b.startDate < PREV_CUTOFF ? 50 : 80, impressions: 4000, ctr: 0.02, position: 12.34 }] });
       if (dim === "date") return J({ rows: [{ keys: ["2026-10-09"], clicks: 3, impressions: 150, ctr: 0.02, position: 11 }, { keys: ["2026-10-10"], clicks: 5, impressions: 160, ctr: 0.031, position: 10 }] });
       if (dim === "query") return J({ rows: [
         { keys: ["qora tuynuk nima"], clicks: 20, impressions: 900, ctr: 0.022, position: 3.2 },   // lowCtr

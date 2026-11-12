@@ -106,14 +106,40 @@ await drafts.updateKinoSettings({ daily: false });
 check("o'chirilgan: yozilmaydi", (await drafts.runKinoIfDue(T("2026-11-17", 7))) === "skipped");
 await drafts.updateKinoSettings({ daily: true });
 
-// Navbat bo'sh — haftalik
+// Navbat bo'sh — qo'shimcha kino YO'Q; haftalik kino oddiy kunlik maqola o'rnida yoziladi
+await drafts.updateKinoSettings({ queue: ["Coco (2017 film)"] });
+await db.query(`UPDATE articles SET "createdAt" = '2026-11-01T10:00:00Z' WHERE "categoryId" = $1`, [kino.id]);
+check("navbatda film bor — haftalik kino kerak emas", (await drafts.weeklyKinoDue(T("2026-11-20", 10))) === null);
 await drafts.updateKinoSettings({ queue: [] });
 const before = calls.length;
+check("navbat bo'sh — qo'shimcha kino yozilmaydi (kino eski bo'lsa ham)", (await drafts.runKinoIfDue(T("2026-11-20", 10))) === "skipped" && calls.length === before);
 await db.query(`UPDATE articles SET "createdAt" = '2026-11-15T10:00:00Z' WHERE "categoryId" = $1`, [kino.id]);
-check("navbat bo'sh, oxirgi kino 4 kun oldin — yozilmaydi", (await drafts.runKinoIfDue(T("2026-11-19", 10))) === "skipped" && calls.length === before);
+check("haftalik: oxirgi kino 4 kun oldin — hali kerak emas", (await drafts.weeklyKinoDue(T("2026-11-19", 10))) === null);
 await db.query(`UPDATE articles SET "createdAt" = '2026-11-12T10:00:00Z' WHERE "categoryId" = $1`, [kino.id]);
-r = await drafts.runKinoIfDue(T("2026-11-20", 10));
-check("navbat bo'sh, 8 kun kino yo'q — AI o'zi film tanlaydi", r === "done" && calls.at(-1).topic === undefined && calls.at(-1).categoryId === kino.id && !calls.at(-1).skipCheck, JSON.stringify(calls.at(-1)));
+check("haftalik: 8 kun kino yo'q — Kino bo'limi", (await drafts.weeklyKinoDue(T("2026-11-20", 10)))?.id === kino.id);
+await drafts.updateKinoSettings({ daily: false });
+check("haftalik: kino o'chirilgan — kerak emas", (await drafts.weeklyKinoDue(T("2026-11-20", 10))) === null);
+await drafts.updateKinoSettings({ daily: true });
+
+// Kunlik maqola: haftalik kino kuni — o'sha kunning YAGONA maqolasi kino haqida (navbatdagi mavzu ertaga)
+await drafts.updateSettings({ autoSeries: false, topics: ["Amir Temur"] });
+const ready = []; drafts.alerts.draftReady = async (a) => { ready.push(a.title); return true; };
+r = await drafts.runDailyIfDue(T("2026-11-20", 10));
+check("kunlik (haftalik kino kuni): kino yozildi, mavzu navbatda qoldi", r === "done" && calls.length === before + 1 && calls.at(-1).categoryId === kino.id && calls.at(-1).topic === undefined && (await drafts.getSettings()).topics[0] === "Amir Temur", JSON.stringify(calls.at(-1)));
+const weekly = (await db.query(`SELECT status, "scheduledAt" FROM articles ORDER BY id DESC LIMIT 1`)).rows[0];
+check("haftalik kino — oddiy qoralama (avtomatik chiqmaydi), admin'ga xabar", weekly.status === "draft" && weekly.scheduledAt === null && ready.length === 1);
+check("o'sha kuni ikkinchi maqola yo'q", (await drafts.runDailyIfDue(T("2026-11-20", 15))) === "skipped" && (await drafts.runKinoIfDue(T("2026-11-20", 15))) === "skipped" && calls.length === before + 1);
+// Kino endi yangi (stub maqola hozir yaratildi) — ertasi kuni odatdagi mavzu
+await db.query(`UPDATE articles SET "createdAt" = '2026-11-20T05:00:00Z' WHERE id = (SELECT MAX(id) FROM articles)`);
+r = await drafts.runDailyIfDue(T("2026-11-21", 10));
+check("ertasi kuni: odatdagi navbat (Amir Temur), kuniga bitta", r === "done" && calls.length === before + 2 && calls.at(-1).topic === "Amir Temur" && (await drafts.runKinoIfDue(T("2026-11-21", 11))) === "skipped", JSON.stringify(calls.at(-1)));
+
+// Navbatda film bor kunda: oddiy maqola HAM, kino HAM (kuniga 2 ta)
+await drafts.updateSettings({ topics: ["Ibn Sino"] });
+await drafts.updateKinoSettings({ queue: ["Coco (2017 film)"] });
+const b2 = calls.length;
+const d1 = await drafts.runDailyIfDue(T("2026-11-22", 7)), k1 = await drafts.runKinoIfDue(T("2026-11-22", 7));
+check("film navbatda: kunlik maqola + kino (2 ta)", d1 === "done" && k1 === "done" && calls.length === b2 + 2 && calls[b2].topic === "Ibn Sino" && calls[b2 + 1].topic === "Coco (2017 film)" && calls[b2 + 1].skipCheck === true, JSON.stringify(calls.slice(b2)));
 
 // Admin tugmasi: navbatni o'zgartirish va hozir yozish
 st = await drafts.updateKinoSettings({ queue: ["  Inside Out 2 ", "", "Paddington 2"] });

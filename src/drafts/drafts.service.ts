@@ -497,6 +497,29 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     return this.getKinoSettings();
   }
 
+  /**
+   * Navbatdagi filmlar tugagan va so'nggi KINO_EVERY_DAYS kunda kino maqola
+   * bo'lmagan bo'lsa — Kino bo'limi (bugungi kunlik maqola kino haqida bo'ladi).
+   * Navbatda film bor paytda kino o'z yo'li bilan har kuni chiqadi — kerak emas.
+   */
+  async weeklyKinoDue(now = new Date()) {
+    if ((await this.getSetting('kino_daily')) === 'off') return null;
+    if ((await this.getKinoQueue()).length) return null;
+    const kino = await this.kinoCategory();
+    if (!kino) return null;
+    const recent = await this.articleModel.count({
+      where: {
+        categoryId: kino.id,
+        createdAt: {
+          [Op.gte]: new Date(
+            now.getTime() - (KINO_EVERY_DAYS - 0.5) * 24 * 60 * 60 * 1000,
+          ),
+        },
+      },
+    });
+    return recent ? null : kino;
+  }
+
   /** Admin tugmasi: navbatdagi kino maqolasini hozir yozish (fonda) */
   runKinoNow() {
     if (this.kinoRunning) {
@@ -509,11 +532,11 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   }
 
   /**
-   * Kunlik kino: navbatda film bo'lsa — har kuni bittasi; navbat bo'sh bo'lsa —
-   * oxirgi kino maqolasidan KINO_EVERY_DAYS kun o'tganda AI o'zi film tanlaydi.
+   * Navbatdagi filmlar: har kuni bittasi — odatdagi kunlik maqoladan TASHQARI.
    * Maqola soat KINO_PUBLISH_HOUR ga rejalashtiriladi (admin Telegram'da xabar
    * oladi va xohlasa tahrirlaydi yoki bekor qiladi), keyin sayt + Telegram +
-   * Instagram'ga o'zi chiqadi.
+   * Instagram'ga o'zi chiqadi. Navbat tugagach qo'shimcha maqola yo'q — kuniga
+   * yana bitta; haftalik kino kunlik maqola o'rnida yoziladi (weeklyKinoDue).
    */
   async runKinoIfDue(
     now = new Date(),
@@ -534,20 +557,10 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       const kino = await this.kinoCategory();
       if (!kino) return 'skipped';
       const topic = (await this.getKinoQueue())[0];
-      if (!topic && !force) {
-        // Navbat bo'sh: haftada bitta yetarli (qo'lda yozilgan kino ham hisob)
-        const recent = await this.articleModel.count({
-          where: {
-            categoryId: kino.id,
-            createdAt: {
-              [Op.gte]: new Date(
-                now.getTime() - (KINO_EVERY_DAYS - 0.5) * 24 * 60 * 60 * 1000,
-              ),
-            },
-          },
-        });
-        if (recent) return 'skipped';
-      }
+      // Navbat bo'sh — qo'shimcha maqola yo'q (haftalik kino oddiy kunlik
+      // maqolaning o'rnida yoziladi: runDailyIfDue → weeklyKinoDue).
+      // Faqat admin tugmasi (force) bo'sh navbatda ham AI tanlagan filmni yozadi
+      if (!topic && !force) return 'skipped';
       await this.setSetting('kino_last_run', today);
       try {
         // Navbatdagi filmni admin o'zi tanlagan — oldindan tekshiruv shart emas
@@ -2051,12 +2064,15 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       } catch (err: any) {
         this.logger.warn(`Avtomatik seriya: ${err?.message}`);
       }
-      const topics = await this.getTopics();
+      // Haftalik kino: bugungi maqola kino haqida (qo'shimcha emas — kuniga
+      // baribir bitta). Mavzular navbati ertadan davom etadi
+      const weeklyKino = await this.weeklyKinoDue(now);
+      const topics = weeklyKino ? [] : await this.getTopics();
       const topic = topics[0];
       // Navbat bo'sh: kunma-kun navbat bilan — Google qidiruv talabi → maktab
       // mavzusi → bo'limlar navbati
       let source: DraftSource | undefined;
-      if (!topic) {
+      if (!topic && !weeklyKino) {
         const cur = await this.getSetting('ai_next_source');
         const now: 'search' | 'school' | 'rotation' =
           cur === 'school' || cur === 'rotation' ? cur : 'search';
@@ -2073,7 +2089,9 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       try {
         let article: Article;
         try {
-          article = await this.generate({ topic, source });
+          article = await this.generate(
+            weeklyKino ? { categoryId: weeklyKino.id } : { topic, source },
+          );
         } catch (err) {
           // Qidiruvda yoki maktab navbatida mavzu bo'lmasa — bugun bo'limlar navbatidan
           if (
