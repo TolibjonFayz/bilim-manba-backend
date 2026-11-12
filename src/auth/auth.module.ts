@@ -7,12 +7,14 @@ import { AuthService } from './auth.service';
 import { JwtStrategy } from './jwt.strategy';
 import { JwtModule } from '@nestjs/jwt';
 import { Module } from '@nestjs/common';
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 
 @Module({
   imports: [
     UsersModule,
     PassportModule,
     MailerModule,
+    AnalyticsModule,
     JwtModule.registerAsync({
       imports: [ConfigModule],
       useFactory: (config: ConfigService) => ({

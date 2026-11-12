@@ -26,8 +26,32 @@ export class ArticlesService {
     private school: SchoolService,
   ) {}
 
+  /**
+   * Hamma chop etilgan maqolalar ro'yxati har sahifada so'raladi (~100 KB,
+   * Supabase'gacha 1–2 s edi). 60 soniya xotirada saqlanadi; maqola
+   * qo'shilsa/o'zgarsa darhol tozalanadi (rejalashtirilgan chop etish — ko'pi
+   * bilan 60 s kechikadi).
+   */
+  private listCache?: { at: number; p: Promise<Article[]> };
+
+  clearListCache() {
+    this.listCache = undefined;
+  }
+
   // Faqat published maqolalar — oddiy userlar uchun
   findAll(categorySlug?: string) {
+    if (categorySlug) return this.queryAll(categorySlug);
+    const c = this.listCache;
+    if (c && Date.now() - c.at < 60_000) return c.p;
+    const p = this.queryAll();
+    this.listCache = { at: Date.now(), p };
+    p.catch(() => {
+      if (this.listCache?.p === p) this.listCache = undefined;
+    });
+    return p;
+  }
+
+  private queryAll(categorySlug?: string) {
     return this.articleModel.findAll({
       where: { status: ArticleStatus.PUBLISHED },
       attributes: { exclude: ['content'] },
@@ -137,18 +161,21 @@ export class ArticlesService {
   }
 
   create(dto: CreateArticleDto, authorId: number) {
+    this.clearListCache();
     return this.articleModel.create({ ...dto, authorId } as any);
   }
 
   async update(id: number, dto: UpdateArticleDto) {
     const article = await this.articleModel.findByPk(id);
     if (!article) throw new NotFoundException('Maqola topilmadi');
+    this.clearListCache();
     return article.update(dto);
   }
 
   async remove(id: number) {
     const article = await this.articleModel.findByPk(id);
     if (!article) throw new NotFoundException('Maqola topilmadi');
+    this.clearListCache();
     await article.destroy();
     return { message: "Maqola o'chirildi" };
   }

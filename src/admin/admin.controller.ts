@@ -21,6 +21,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { AdminService } from './admin.service';
 import { DraftsService } from '../drafts/drafts.service';
 import { Period, StatsService } from '../stats/stats.service';
+import { AnalyticsService } from '../analytics/analytics.service';
 import { SearchConsoleService } from '../search-console/search-console.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
 import { ChannelQuizService } from '../publishing/channel-quiz.service';
@@ -43,6 +44,7 @@ export class AdminController {
     private series: SeriesService,
     private school: SchoolService,
     private channelQuiz: ChannelQuizService,
+    private analytics: AnalyticsService,
   ) {}
 
   // Dashboard statistika
@@ -61,6 +63,24 @@ export class AdminController {
   @Get('stats/report')
   statsReport(@Query('period') period: string) {
     return this.stats.report((period || 'week') as Period);
+  }
+
+  // Saytning o'z statistikasi: tashriflar, o'qish vaqti, bosishlar, email formalari
+  @Get('analytics')
+  analyticsReport(@Query('period') period: string) {
+    return this.analytics.report((period || 'week') as Period);
+  }
+
+  // Hozir saytda kimlar bor (so'nggi 5 daqiqa)
+  @Get('analytics/live')
+  analyticsLive() {
+    return this.analytics.live();
+  }
+
+  // Bitta tashrif — qadamma-qadam
+  @Get('analytics/session/:id')
+  analyticsSession(@Param('id') id: string) {
+    return this.analytics.session(id);
   }
 
   // Google Search Console: umumiy ko'rinish (7 | 28 | 90 kun)
@@ -276,6 +296,22 @@ export class AdminController {
   @Delete('alerts/telegram')
   alertsUnlink() {
     return this.alerts.unlink();
+  }
+
+  // Kino: navbatdagi filmlar (har kuni bittadan) va haftalik kino maqolasi
+  @Get('kino')
+  kinoSettings() {
+    return this.drafts.getKinoSettings();
+  }
+
+  @Put('kino')
+  updateKinoSettings(@Body() body: { daily?: boolean; queue?: string[] }) {
+    return this.drafts.updateKinoSettings(body);
+  }
+
+  @Post('kino/run')
+  runKino() {
+    return this.drafts.runKinoNow();
   }
 
   // Kunlik AI qoralama sozlamalari va mavzular navbati

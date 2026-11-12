@@ -20,6 +20,7 @@ import { QuizModule } from 'src/quiz/quiz.module';
 import { SeriesModule } from 'src/series/series.module';
 import { SchoolModule } from 'src/school/school.module';
 import { StatsService } from 'src/stats/stats.service';
+import { AnalyticsModule } from 'src/analytics/analytics.module';
 
 @Module({
   imports: [
@@ -35,6 +36,7 @@ import { StatsService } from 'src/stats/stats.service';
     QuizModule,
     SeriesModule,
     SchoolModule,
+    AnalyticsModule,
   ],
   // SearchConsoleService — DraftsModule'dan (bitta nusxa, umumiy kesh)
   providers: [AdminService, StatsService],

@@ -25,6 +25,7 @@ import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
 import { DatabaseModule } from './database/database.module';
 import { HealthModule } from './health/health.module';
+import { AnalyticsModule } from './analytics/analytics.module';
 
 @Module({
   imports: [
@@ -67,6 +68,7 @@ import { HealthModule } from './health/health.module';
     BookmarksModule,
     CommentsModule,
     NotificationsModule,
+    AnalyticsModule,
   ],
   controllers: [],
   providers: [],

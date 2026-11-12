@@ -37,6 +37,8 @@ import {
 } from './images';
 import { CloudinaryService } from '../cloudinary/cloudinary.service';
 import { AdminAlertService } from '../publishing/admin-alert.service';
+import { PublishingService } from '../publishing/publishing.service';
+import { DETEKTIV_HTML, DETEKTIV_SLUG } from './data/detektiv-qoylar';
 import { SeriesService } from '../series/series.service';
 import { SchoolService } from '../school/school.service';
 import { FactCheckService } from './fact-check.service';
@@ -57,6 +59,21 @@ const AUTO_SERIES_EVERY_DAYS = 10;
 const DEMAND_MIN_IMPRESSIONS = 5;
 // Kunlik qoralama Toshkent vaqti bilan shu soatdan keyin yoziladi
 const DAILY_HOUR = 6;
+/** Kino maqolasi shu soatda (Toshkent) avtomatik chop etiladi */
+const KINO_PUBLISH_HOUR = 18;
+/** Kino navbati bo'sh bo'lsa — kamida shuncha kunda bitta kino maqola */
+const KINO_EVERY_DAYS = 7;
+/**
+ * 2026-11-12: admin so'ragan filmlar — har kuni bittadan, shu tartibda.
+ * Wikipedia havolasi — qidiruvda adashmasin (bir xil nomli boshqa film bor).
+ */
+export const KINO_START_TOPICS = [
+  'https://en.wikipedia.org/wiki/The_Odyssey_(2026_film)',
+  'https://en.wikipedia.org/wiki/Spider-Man:_Brand_New_Day',
+  'https://en.wikipedia.org/wiki/The_Uprising_(2026_film)',
+  'https://en.wikipedia.org/wiki/Thunderbolts*',
+  'https://en.wikipedia.org/wiki/Doctor_Strange_in_the_Multiverse_of_Madness',
+];
 const TASHKENT_OFFSET_MS = 5 * 60 * 60 * 1000;
 const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
 
@@ -265,6 +282,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     private readonly series: SeriesService,
     private readonly school: SchoolService,
     private readonly factCheck: FactCheckService,
+    private readonly publishing: PublishingService,
   ) {}
 
   private job: DraftJob | null = null;
@@ -350,6 +368,229 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     setTimeout(() => void this.seriesKickoffOnce(), 3 * 60 * 1000).unref();
     // 2026-10-18: /maktab — mavjud maqolalardan belgilash + mavzular navbati
     setTimeout(() => void this.schoolKickoffOnce(), 6 * 60 * 1000).unref();
+    // 2026-11-12: "Detektiv qo'ylar" matni xom markdown edi — bezatilgan HTML
+    setTimeout(() => void this.fixDetektivOnce(), 2 * 60 * 1000).unref();
+    // 2026-11-12: 5 ta film kino navbatiga (birinchi kunlik tekshiruvdan oldin)
+    // (jadvallar yaratilgandan keyin, birinchi kunlik tekshiruvdan — 60 s — oldin)
+    setTimeout(
+      () =>
+        void this.kinoKickoffOnce().catch((err) =>
+          this.logger.error(`Kino navbatini boshlashda xato: ${err?.message}`),
+        ),
+      20 * 1000,
+    ).unref();
+  }
+
+  /** Bir marta: "Detektiv qo'ylar" matnini bezatilgan HTML bilan almashtirish */
+  async fixDetektivOnce() {
+    const key = 'once_fix_detektiv_v1';
+    try {
+      if (await this.getSetting(key)) return;
+      const article = await this.articleModel.findOne({
+        where: { slug: DETEKTIV_SLUG },
+      });
+      if (!article) return;
+      await this.setSetting(key, new Date().toISOString());
+      const old = article.get('content') as string;
+      const url = await this.cloudflare.uploadJson(
+        { message: DETEKTIV_HTML },
+        `${DETEKTIV_SLUG}-${Date.now()}.json`,
+      );
+      await article.update({ content: url } as any);
+      this.logger.log(`"Detektiv qo'ylar" matni yangilandi: ${url} (eskisi: ${old})`);
+    } catch (err: any) {
+      this.logger.error(`"Detektiv qo'ylar" yangilanmadi: ${err?.message}`);
+    }
+  }
+
+  // ---------- Kino: navbatdagi filmlar har kuni + haftasiga kamida bitta ----------
+
+  private kinoRunning = false;
+
+  private async getKinoQueue(): Promise<string[]> {
+    try {
+      const v = JSON.parse((await this.getSetting('kino_queue')) ?? '[]');
+      return Array.isArray(v) ? v.map(String).filter(Boolean) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  private async removeKinoTopic(topic: string) {
+    const list = await this.getKinoQueue();
+    const i = list.indexOf(topic);
+    if (i >= 0) list.splice(i, 1);
+    await this.setSetting('kino_queue', JSON.stringify(list));
+  }
+
+  /** Bir marta: admin so'ragan 5 ta film navbat boshiga qo'yiladi */
+  async kinoKickoffOnce() {
+    const key = 'once_kino_queue_v1';
+    if (await this.getSetting(key)) return;
+    await this.setSetting(key, new Date().toISOString());
+    const queue = await this.getKinoQueue();
+    const merged = [
+      ...KINO_START_TOPICS,
+      ...queue.filter((t) => !KINO_START_TOPICS.includes(t)),
+    ];
+    await this.setSetting('kino_queue', JSON.stringify(merged));
+  }
+
+  private async kinoCategory() {
+    const cats = (await this.categoryModel.findAll({
+      attributes: ['id', 'name'],
+      raw: true,
+    })) as unknown as { id: number; name: string }[];
+    return cats.find((c) => c.name.trim().toLowerCase() === 'kino') ?? null;
+  }
+
+  /** Bugun soat KINO_PUBLISH_HOUR da (o'tib ketgan bo'lsa — 30 daqiqadan keyin) */
+  static kinoPublishAt(now = new Date()): Date {
+    const local = new Date(now.getTime() + TASHKENT_OFFSET_MS);
+    local.setUTCHours(KINO_PUBLISH_HOUR, 0, 0, 0);
+    const at = new Date(local.getTime() - TASHKENT_OFFSET_MS);
+    const soon = new Date(now.getTime() + 30 * 60 * 1000);
+    return at > soon ? at : soon;
+  }
+
+  async getKinoSettings() {
+    const kino = await this.kinoCategory();
+    const [daily, queue, lastRun, lastError, last] = await Promise.all([
+      this.getSetting('kino_daily'),
+      this.getKinoQueue(),
+      this.getSetting('kino_last_run'),
+      this.getSetting('kino_last_error'),
+      kino
+        ? (this.articleModel.findOne({
+            where: { categoryId: kino.id },
+            attributes: ['id', 'title', 'status', 'scheduledAt', 'createdAt'],
+            order: [['createdAt', 'DESC']],
+            raw: true,
+          }) as any)
+        : null,
+    ]);
+    return {
+      daily: daily !== 'off',
+      queue,
+      publishHour: KINO_PUBLISH_HOUR,
+      everyDays: KINO_EVERY_DAYS,
+      lastRun,
+      lastError: lastError || null,
+      running: this.kinoRunning,
+      lastKino: last ?? null,
+      hasCategory: Boolean(kino),
+    };
+  }
+
+  async updateKinoSettings(dto: { daily?: boolean; queue?: unknown }) {
+    if (typeof dto?.daily === 'boolean') {
+      await this.setSetting('kino_daily', dto.daily ? 'on' : 'off');
+    }
+    if (Array.isArray(dto?.queue)) {
+      const queue = dto.queue
+        .map((t) => String(t ?? '').trim())
+        .filter(Boolean)
+        .slice(0, 60)
+        .map((t) => t.slice(0, 300));
+      await this.setSetting('kino_queue', JSON.stringify(queue));
+    }
+    return this.getKinoSettings();
+  }
+
+  /** Admin tugmasi: navbatdagi kino maqolasini hozir yozish (fonda) */
+  runKinoNow() {
+    if (this.kinoRunning) {
+      throw new BadRequestException('Kino maqolasi allaqachon yozilmoqda');
+    }
+    void this.runKinoIfDue(new Date(), true).catch((err) =>
+      this.logger.error(`Kino: ${err?.message}`),
+    );
+    return { started: true };
+  }
+
+  /**
+   * Kunlik kino: navbatda film bo'lsa — har kuni bittasi; navbat bo'sh bo'lsa —
+   * oxirgi kino maqolasidan KINO_EVERY_DAYS kun o'tganda AI o'zi film tanlaydi.
+   * Maqola soat KINO_PUBLISH_HOUR ga rejalashtiriladi (admin Telegram'da xabar
+   * oladi va xohlasa tahrirlaydi yoki bekor qiladi), keyin sayt + Telegram +
+   * Instagram'ga o'zi chiqadi.
+   */
+  async runKinoIfDue(
+    now = new Date(),
+    force = false,
+  ): Promise<'done' | 'skipped' | 'failed'> {
+    if (this.kinoRunning) return 'skipped';
+    if (!this.getLlm()) return 'skipped';
+    const local = new Date(now.getTime() + TASHKENT_OFFSET_MS);
+    if (!force && local.getUTCHours() < DAILY_HOUR) return 'skipped';
+    const today = tashkentDay(now);
+
+    this.kinoRunning = true;
+    try {
+      if (!force && (await this.getSetting('kino_daily')) === 'off')
+        return 'skipped';
+      if (!force && (await this.getSetting('kino_last_run')) === today)
+        return 'skipped';
+      const kino = await this.kinoCategory();
+      if (!kino) return 'skipped';
+      const topic = (await this.getKinoQueue())[0];
+      if (!topic && !force) {
+        // Navbat bo'sh: haftada bitta yetarli (qo'lda yozilgan kino ham hisob)
+        const recent = await this.articleModel.count({
+          where: {
+            categoryId: kino.id,
+            createdAt: {
+              [Op.gte]: new Date(
+                now.getTime() - (KINO_EVERY_DAYS - 0.5) * 24 * 60 * 60 * 1000,
+              ),
+            },
+          },
+        });
+        if (recent) return 'skipped';
+      }
+      await this.setSetting('kino_last_run', today);
+      try {
+        // Navbatdagi filmni admin o'zi tanlagan — oldindan tekshiruv shart emas
+        // (yozuvchi baribir qadriyatlar qoidasiga amal qiladi)
+        const article = await this.generate(
+          topic
+            ? { topic, categoryId: kino.id, skipCheck: true }
+            : { categoryId: kino.id },
+        );
+        const at = DraftsService.kinoPublishAt(new Date());
+        await article.update({ scheduledAt: at } as any);
+        await this.publishing.refreshSchedule();
+        if (topic) await this.removeKinoTopic(topic);
+        await this.setSetting('kino_last_error', '');
+        const hhmm = new Date(at.getTime() + TASHKENT_OFFSET_MS)
+          .toISOString()
+          .slice(11, 16);
+        const facts = await this.factCheck.count(article.id);
+        await this.alerts.send(
+          `🎬 <b>Kino maqolasi tayyor</b>\n\n${escapeHtml(article.title)}\n\nBugun soat <b>${hhmm}</b> da saytga, Telegram va Instagram'ga o'zi chiqadi.${facts ? `\n\n🔍 Fakt-tekshiruv: <b>${facts} ta shubhali joy</b> — chiqishidan oldin ko'rib qo'ying.` : ''}\nO'zgartirish yoki bekor qilish uchun ko'rish sahifasini oching.`,
+          { text: "👀 Ko'rib chiqish", path: `/admin/articles/${article.id}/preview` },
+        );
+        this.logger.log(`Kino maqolasi: ${article.slug} → ${at.toISOString()}`);
+        return 'done';
+      } catch (err: any) {
+        await this.setSetting(
+          'kino_last_error',
+          `${today}: ${topic ? `"${topic}" — ` : ''}${err?.message ?? 'xato'}`,
+        );
+        await this.alerts.draftFailed(
+          `Kino maqolasi: ${String(err?.message ?? 'xato')}`,
+          topic,
+          true,
+        );
+        // Wikipedia'da yo'q yoki qoidaga zid — navbatni to'sib qo'ymasin
+        if (topic && err instanceof BadRequestException) {
+          await this.removeKinoTopic(topic);
+        }
+        return 'failed';
+      }
+    } finally {
+      this.kinoRunning = false;
+    }
   }
 
   /** Bir marta: maktabga mos mavjud maqolalarni belgilash va mavzular navbati */
@@ -588,6 +829,7 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     categoryId: number | undefined,
     llm: Llm,
     source?: DraftSource,
+    skipCheck = false,
   ): Promise<{
     main: WikiSource;
     categoryId?: number;
@@ -616,7 +858,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
         `Wikipedia bilan aloqa bo'lmadi: ${err?.message ?? 'xato'}. Birozdan keyin qayta urinib ko'ring.`,
       );
     }
-    const verdict = await this.checkTopic(main, llm);
+    const verdict = skipCheck
+      ? { ok: true, reason: '' }
+      : await this.checkTopic(main, llm);
     if (!verdict.ok) {
       throw new BadRequestException(
         `Mavzu sayt qoidalariga mos emas (18+ yoki Islom qadriyatlariga zid): ${verdict.reason}`,
@@ -980,6 +1224,8 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
      * uchun (mavzusiz bo'lsa maktab navbatidan); aks holda bo'limlar navbatidan
      */
     source?: DraftSource;
+    /** Admin tanlagan mavzu (kino navbati) — oldindan qadriyat tekshiruvisiz */
+    skipCheck?: boolean;
   }) {
     const llm = this.getLlm();
     if (!llm) {
@@ -993,6 +1239,7 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
       opts.categoryId,
       llm,
       opts.source,
+      opts.skipCheck,
     );
     const sources = await this.gatherSources(picked.main, llm);
     // Mavzu berilgan, lekin "maktab uchun" tanlangan — fan keyin bo'limdan olinadi
@@ -1764,6 +2011,11 @@ To'liq yaxshilangan versiyani qaytar (faqat o'zgargan joylarni emas).`;
       await this.runDailyIfDue();
     } catch (err: any) {
       this.logger.error(`Kunlik qoralama: ${err?.message}`);
+    }
+    try {
+      await this.runKinoIfDue();
+    } catch (err: any) {
+      this.logger.error(`Kunlik kino: ${err?.message}`);
     }
     this.schedule();
   }

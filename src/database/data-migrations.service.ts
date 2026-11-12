@@ -132,6 +132,70 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
     );
+    // Saytning o'z statistikasi (AnalyticsService): tashriflar va hodisalar
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS analytics_sessions (
+        id VARCHAR(40) PRIMARY KEY,
+        "visitorId" VARCHAR(40) NOT NULL,
+        "userId" INTEGER,
+        "startedAt" TIMESTAMPTZ NOT NULL,
+        "lastAt" TIMESTAMPTZ NOT NULL,
+        "landingPath" VARCHAR(300),
+        referrer VARCHAR(500),
+        "source" VARCHAR(60),
+        "utmSource" VARCHAR(60),
+        "utmMedium" VARCHAR(60),
+        "utmCampaign" VARCHAR(100),
+        device VARCHAR(20),
+        os VARCHAR(20),
+        browser VARCHAR(30),
+        country VARCHAR(4),
+        "screen" VARCHAR(20),
+        pageviews INTEGER NOT NULL DEFAULT 0,
+        events INTEGER NOT NULL DEFAULT 0,
+        "activeSeconds" INTEGER NOT NULL DEFAULT 0,
+        "isNew" BOOLEAN NOT NULL DEFAULT true
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_sessions_started_idx ON analytics_sessions ("startedAt")',
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_sessions_visitor_idx ON analytics_sessions ("visitorId")',
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_sessions_last_idx ON analytics_sessions ("lastAt")',
+    );
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS analytics_events (
+        id BIGSERIAL PRIMARY KEY,
+        "visitorId" VARCHAR(40) NOT NULL,
+        "sessionId" VARCHAR(40) NOT NULL,
+        "userId" INTEGER,
+        type VARCHAR(40) NOT NULL,
+        path VARCHAR(300),
+        data JSONB,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_events_type_created_idx ON analytics_events (type, "createdAt")',
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_events_session_idx ON analytics_events ("sessionId", "createdAt")',
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS analytics_events_created_idx ON analytics_events ("createdAt")',
+    );
+    // Email qaysi formada (ro'yxatdan o'tish / pastdagi obuna ...) va qaysi sahifada kiritilgan
+    for (const table of ['users', 'subscribers']) {
+      await this.sequelize.query(
+        `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS "signupSource" VARCHAR(60)`,
+      );
+      await this.sequelize.query(
+        `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS "signupPath" VARCHAR(300)`,
+      );
+    }
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS data_migrations (
         id VARCHAR(255) PRIMARY KEY,

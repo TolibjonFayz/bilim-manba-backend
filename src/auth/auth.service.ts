@@ -11,6 +11,7 @@ import { JwtService } from '@nestjs/jwt';
 import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { Op } from 'sequelize';
+import { AnalyticsService } from 'src/analytics/analytics.service';
 
 @Injectable()
 export class AuthService {
@@ -18,6 +19,7 @@ export class AuthService {
     private usersService: UsersService,
     private jwtService: JwtService,
     private mailerService: MailerService,
+    private analytics: AnalyticsService,
   ) {}
 
   async register(dto: RegisterDto) {
@@ -25,8 +27,10 @@ export class AuthService {
     if (existing)
       throw new BadRequestException("Bu email allaqachon ro'yxatdan o'tgan");
 
-    const hashed = await bcrypt.hash(dto.password, 10);
-    const user = await this.usersService.create({ ...dto, password: hashed });
+    const { signupSource, signupPath, ...fields } = dto;
+    const hashed = await bcrypt.hash(fields.password, 10);
+    const user = await this.usersService.create({ ...fields, password: hashed });
+    await this.analytics.markSignup('users', user.id, signupSource, signupPath);
 
     return {
       userId: user.id,

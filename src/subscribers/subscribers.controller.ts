@@ -6,8 +6,9 @@ export class SubscribersController {
   constructor(private subscribersService: SubscribersService) {}
 
   @Post('subscribe')
-  subscribe(@Body() body: { email: string }) {
-    return this.subscribersService.subscribe(body.email);
+  // source — qaysi forma (masalan, "newsletter_footer"), path — qaysi sahifada
+  subscribe(@Body() body: { email: string; source?: string; path?: string }) {
+    return this.subscribersService.subscribe(body.email, body.source, body.path);
   }
 
   @Get('unsubscribe')
