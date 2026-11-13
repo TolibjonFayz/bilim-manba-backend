@@ -5,6 +5,7 @@ import {
   Param,
   UseGuards,
   Request,
+  ParseIntPipe,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -28,8 +29,8 @@ export class NotificationsController {
   }
 
   @Patch(':id/read')
-  markAsRead(@Param('id') id: string, @Request() req: any) {
-    return this.notificationsService.markAsRead(req.user.userId, +id);
+  markAsRead(@Param('id', ParseIntPipe) id: number, @Request() req: any) {
+    return this.notificationsService.markAsRead(req.user.userId, id);
   }
 
   @Patch('read-all')

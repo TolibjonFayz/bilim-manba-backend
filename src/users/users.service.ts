@@ -13,6 +13,20 @@ import * as bcrypt from 'bcryptjs';
 import { Op } from 'sequelize';
 import { Category } from 'src/categories/models/category.model';
 import { Bookmark } from 'src/bookmarks/models/bookmark.model';
+import { JwtService } from '@nestjs/jwt';
+
+/** Token tekshiruvi uchun foydalanuvchining joriy holati (JwtStrategy) */
+export interface AuthState {
+  email: string;
+  role: string;
+  plan: string;
+  isActive: boolean;
+  passwordChangedAt: number | null;
+}
+
+const AUTH_CACHE_MS = 60_000;
+/** JWT'dagi iat soniyalarda — solishtirish to'g'ri chiqishi uchun soniyaga yaxlitlaymiz */
+const nowToSecond = () => new Date(Math.floor(Date.now() / 1000) * 1000);
 
 @Injectable()
 export class UsersService {
@@ -22,7 +36,34 @@ export class UsersService {
     @InjectModel(Like) private likeModel: typeof Like,
     @InjectModel(Article) private articleModel: typeof Article,
     @InjectModel(Bookmark) private bookmarkModel: typeof Bookmark,
+    private jwt: JwtService,
   ) {}
+
+  // Har so'rovda bazaga bormaslik uchun 60 soniya xotirada
+  private authCache = new Map<number, { at: number; state: AuthState }>();
+
+  async authState(id: number): Promise<AuthState | null> {
+    const cached = this.authCache.get(id);
+    if (cached && Date.now() - cached.at < AUTH_CACHE_MS) return cached.state;
+
+    const user = await this.userModel.findByPk(id, {
+      attributes: ['id', 'email', 'role', 'plan', 'isActive', 'passwordChangedAt'],
+    });
+    if (!user) return null;
+    const v = user.dataValues;
+    const state: AuthState = {
+      email: v.email,
+      role: v.role,
+      plan: v.plan,
+      isActive: v.isActive !== false,
+      passwordChangedAt: v.passwordChangedAt
+        ? new Date(v.passwordChangedAt).getTime()
+        : null,
+    };
+    if (this.authCache.size > 5000) this.authCache.clear();
+    this.authCache.set(id, { at: Date.now(), state });
+    return state;
+  }
 
   //Create user
   async create(data: Partial<User>) {
@@ -87,7 +128,9 @@ export class UsersService {
   async updateMe(userId: number, dto: UpdateUserDto) {
     const user = await this.userModel.findByPk(userId);
     if (!user) throw new NotFoundException('User topilmadi');
-    await user.update(dto);
+    const data: UpdateUserDto = { ...dto };
+    if (typeof data.fullName === 'string') data.fullName = data.fullName.trim();
+    await user.update(data);
     return await this.findById(userId);
   }
 
@@ -104,8 +147,22 @@ export class UsersService {
     if (!match) throw new BadRequestException("Joriy parol noto'g'ri");
 
     const hashed = await bcrypt.hash(dto.newPassword, 10);
-    await user.update({ password: hashed });
-    return { message: "Parol muvaffaqiyatli o'zgartirildi" };
+    // Eski tokenlar (boshqa qurilmalar, o'g'irlangan token) shu paytdan bekor
+    await user.update({ password: hashed, passwordChangedAt: nowToSecond() });
+    this.authCache.delete(userId);
+
+    // Joriy qurilma tizimdan chiqib ketmasin — yangi token
+    const v = user.dataValues;
+    const access_token = this.jwt.sign({
+      sub: userId,
+      email: v.email,
+      role: v.role,
+      plan: v.plan,
+    });
+    return {
+      message: "Parol muvaffaqiyatli o'zgartirildi",
+      token: { access_token },
+    };
   }
 
   // User statistikasi
@@ -198,9 +255,14 @@ export class UsersService {
       resetToken: token,
       resetTokenExpires: expires,
     };
-    if (newPassword) updateData.password = newPassword;
+    if (newPassword) {
+      updateData.password = newPassword;
+      // Parol tiklandi — avval berilgan barcha tokenlar bekor bo'ladi
+      updateData.passwordChangedAt = nowToSecond();
+    }
 
     await this.userModel.update(updateData, { where: { id: userId } });
+    this.authCache.delete(userId);
   }
 
   async findByResetToken(token: string) {

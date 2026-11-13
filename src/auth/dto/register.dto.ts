@@ -10,6 +10,8 @@ import {
 export class RegisterDto {
   @ApiProperty({ example: 'John Doe', description: 'Full name of the user' })
   @IsString()
+  @MinLength(2)
+  @MaxLength(80)
   fullName: string;
 
   @ApiProperty({
@@ -17,6 +19,7 @@ export class RegisterDto {
     description: 'Email address of the user',
   })
   @IsEmail()
+  @MaxLength(254)
   email: string;
 
   @ApiProperty({
@@ -25,6 +28,7 @@ export class RegisterDto {
   })
   @IsString()
   @MinLength(6)
+  @MaxLength(128)
   password: string;
 
   // Statistika: qaysi forma va qaysi sahifadan ro'yxatdan o'tdi

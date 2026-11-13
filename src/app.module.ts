@@ -20,6 +20,8 @@ import { Like } from './likes/models/like.model';
 import { AuthModule } from './auth/auth.module';
 import { AiModule } from './ai/ai.module';
 import { Module } from '@nestjs/common';
+import { APP_GUARD } from '@nestjs/core';
+import { RateLimitGuard } from './common/rate-limit';
 import { BookmarksModule } from './bookmarks/bookmarks.module';
 import { CommentsModule } from './comments/comments.module';
 import { NotificationsModule } from './notifications/notifications.module';
@@ -71,6 +73,7 @@ import { AnalyticsModule } from './analytics/analytics.module';
     AnalyticsModule,
   ],
   controllers: [],
-  providers: [],
+  // Faqat @RateLimit qo'yilgan manzillarda ishlaydi
+  providers: [{ provide: APP_GUARD, useClass: RateLimitGuard }],
 })
 export class AppModule {}

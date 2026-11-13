@@ -18,6 +18,12 @@ import { UpdateArticleDto } from './dto/update-article.dto';
 import { Roles } from '../auth/decorators/roles.decorator';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ArticlesService } from './articles.service';
+import { RateLimit, takeToken } from '../common/rate-limit';
+import { clientIp } from '../common/client-ip';
+
+/** ?q=a&q=b yoki ?q[x]=y kabi g'alati qiymatlar bazaga yetib bormasin */
+const oneString = (v: unknown, max: number): string | undefined =>
+  typeof v === 'string' && v ? v.slice(0, max) : undefined;
 
 @ApiTags('Articles')
 @Controller('articles')
@@ -27,8 +33,8 @@ export class ArticlesController {
   // Hammaga ochiq
   @ApiOperation({ summary: 'Get all articles' })
   @Get('all')
-  findAll(@Query('category') category?: string) {
-    return this.articlesService.findAll(category);
+  findAll(@Query('category') category?: unknown) {
+    return this.articlesService.findAll(oneString(category, 200));
   }
 
   // Token bo'lsa plan tekshiriladi, bo'lmasa 'free' hisoblanadi
@@ -82,13 +88,15 @@ export class ArticlesController {
 
   // findAll dan keyin qo'sh
   @ApiOperation({ summary: 'Search articles' })
+  @RateLimit(60, 60)
   @Get('search')
-  search(@Query('q') q: string) {
-    return this.articlesService.search(q);
+  search(@Query('q') q: unknown) {
+    return this.articlesService.search(oneString(q, 100) ?? '');
   }
 
   // Maqola oxiridagi testni tugatdi (hammaga ochiq): to'g'ri javoblar soni 0–3
   // Token bo'lsa — test bali foydalanuvchiga yoziladi (reyting)
+  @RateLimit(30, 60)
   @UseGuards(OptionalJwtGuard)
   @Post('quiz-result/:slug')
   quizResult(
@@ -104,8 +112,16 @@ export class ArticlesController {
     );
   }
 
+  // Token bo'lsa — o'qish foydalanuvchi tarixiga yoziladi (avval guard yo'q
+  // edi va hech qachon yozilmasdi)
+  @RateLimit(60, 60)
+  @UseGuards(OptionalJwtGuard)
   @Post('view/:slug')
   recordView(@Param('slug') slug: string, @Request() req: any) {
+    // Ko'rishlar sonini sun'iy oshirishga qarshi: bitta IP dan bitta maqola
+    // 10 daqiqada ko'pi bilan 3 marta hisoblanadi
+    const key = `view:${clientIp(req)}:${slug.slice(0, 200)}`;
+    if (!takeToken(key, 3, 10 * 60 * 1000)) return { success: true };
     const userId = req.user?.userId;
     return this.articlesService.recordView(slug, userId);
   }

@@ -36,6 +36,10 @@ export class PaymentService {
     return user;
   }
 
+  async userExists(userId: number): Promise<boolean> {
+    return (await this.userModel.count({ where: { id: userId } })) > 0;
+  }
+
   // Summa to'g'rimi tekshirish
   validateAmount(amount: number): boolean {
     return amount === PREMIUM_PRICE_TIYIN;

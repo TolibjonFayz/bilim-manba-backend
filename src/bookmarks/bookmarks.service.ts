@@ -1,6 +1,6 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
-import { Article } from 'src/articles/models/article.model';
+import { Article, ArticleStatus } from 'src/articles/models/article.model';
 import { Bookmark } from './models/bookmark.model';
 
 @Injectable()
@@ -11,7 +11,10 @@ export class BookmarksService {
   ) {}
 
   async toggle(userId: number, articleId: number) {
-    const article = await this.articleModel.findByPk(articleId);
+    // Qoralamalar mavjudligini id terib bilib bo'lmasin
+    const article = await this.articleModel.findOne({
+      where: { id: articleId, status: ArticleStatus.PUBLISHED },
+    });
     if (!article) throw new NotFoundException('Maqola topilmadi');
 
     const existing = await this.bookmarkModel.findOne({

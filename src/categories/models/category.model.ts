@@ -4,13 +4,13 @@ import { Article } from 'src/articles/models/article.model';
 @Table({ tableName: 'categories', timestamps: true })
 export class Category extends Model {
   @Column({ type: DataType.STRING, allowNull: false })
-  name: string;
+  declare name: string;
 
   @Column({ type: DataType.STRING, unique: true, allowNull: false })
-  slug: string;
+  declare slug: string;
 
   @Column({ type: DataType.STRING, allowNull: true })
-  icon: string;
+  declare icon: string;
 
   @HasMany(() => Article)
   articles: Article[];

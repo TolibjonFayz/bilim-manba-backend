@@ -1,6 +1,7 @@
 import { Body, Controller, HttpCode, Post, Req } from '@nestjs/common';
 import { ApiExcludeEndpoint } from '@nestjs/swagger';
 import { AnalyticsService } from './analytics.service';
+import { RateLimit } from '../common/rate-limit';
 
 @Controller()
 export class AnalyticsController {
@@ -12,6 +13,7 @@ export class AnalyticsController {
    * ham (sendBeacon) yetib borishi uchun. Hech qachon xato qaytarmaydi.
    */
   @ApiExcludeEndpoint()
+  @RateLimit(120, 60)
   @Post('t')
   @HttpCode(200)
   async track(@Body() body: unknown, @Req() req: any) {

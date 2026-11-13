@@ -13,19 +13,19 @@ import { User } from 'src/users/models/user.model';
 export class ArticleView extends Model {
   @ForeignKey(() => User)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  userId: number;
+  declare userId: number;
 
   @BelongsTo(() => User)
   user: User;
 
   @ForeignKey(() => Article)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  articleId: number;
+  declare articleId: number;
 
   @BelongsTo(() => Article)
   article: Article;
 
   // O'qish vaqti (soniyalarda) — opsional
   @Column({ type: DataType.INTEGER, defaultValue: 0 })
-  readDuration: number;
+  declare readDuration: number;
 }

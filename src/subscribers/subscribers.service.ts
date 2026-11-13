@@ -1,7 +1,12 @@
-import { Injectable, ConflictException } from '@nestjs/common';
+import {
+  Injectable,
+  ConflictException,
+  BadRequestException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { Subscriber } from './models/subscriber.model';
 import { AnalyticsService } from 'src/analytics/analytics.service';
+import { checkUnsubscribeToken } from '../common/unsubscribe-token';
 
 @Injectable()
 export class SubscribersService {
@@ -11,6 +16,7 @@ export class SubscribersService {
   ) {}
 
   async subscribe(email: string, source?: string, path?: string) {
+    email = email.trim();
     const existing = await this.subscriberModel.findOne({ where: { email } });
     if (existing) {
       if (!existing.isActive) {
@@ -25,10 +31,15 @@ export class SubscribersService {
     return { message: "Muvaffaqiyatli obuna bo'ldingiz!" };
   }
 
-  async unsubscribe(email: string) {
+  async unsubscribe(email: string, token: string) {
+    if (!checkUnsubscribeToken(email, token)) {
+      throw new BadRequestException(
+        "Havola noto'g'ri yoki eskirgan. Eng so'nggi xatdagi havoladan foydalaning.",
+      );
+    }
     await this.subscriberModel.update(
       { isActive: false },
-      { where: { email } },
+      { where: { email: email.trim() } },
     );
     return { message: 'Obuna bekor qilindi' };
   }

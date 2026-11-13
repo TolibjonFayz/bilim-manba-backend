@@ -47,4 +47,9 @@ export class User extends Model {
 
   @Column({ type: DataType.DATE, allowNull: true })
   declare resetTokenExpires: Date;
+
+  // Parol o'zgargan vaqt — undan oldin berilgan tokenlar bekor bo'ladi.
+  // Ustun DataMigrationsService.ensureSchema orqali qo'shiladi.
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare passwordChangedAt: Date | null;
 }

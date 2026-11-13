@@ -1,5 +1,5 @@
 import { Injectable, NotFoundException } from '@nestjs/common';
-import { Article } from 'src/articles/models/article.model';
+import { Article, ArticleStatus } from 'src/articles/models/article.model';
 import { InjectModel } from '@nestjs/sequelize';
 import { Like } from './models/like.model';
 
@@ -12,7 +12,10 @@ export class LikesService {
 
   // Toggle like — agar bor bo'lsa o'chir, yo'q bo'lsa qo'sh
   async toggle(userId: number, articleId: number) {
-    const article = await this.articleModel.findByPk(articleId);
+    // Qoralamalar mavjudligini id terib bilib bo'lmasin
+    const article = await this.articleModel.findOne({
+      where: { id: articleId, status: ArticleStatus.PUBLISHED },
+    });
     if (!article) throw new NotFoundException('Maqola topilmadi');
 
     // User shu maqolani like qilganmi?

@@ -13,7 +13,14 @@ export class CloudinaryService {
   }
 
   async uploadImage(file: Express.Multer.File): Promise<string> {
-    if (!file.mimetype.startsWith('image/')) {
+    if (!file?.buffer) {
+      throw new BadRequestException('Rasm fayli yuborilmadi');
+    }
+    // SVG ichida skript bo'lishi mumkin — qabul qilinmaydi
+    if (
+      !file.mimetype.startsWith('image/') ||
+      file.mimetype === 'image/svg+xml'
+    ) {
       throw new BadRequestException('Faqat rasm fayllari qabul qilinadi');
     }
 
@@ -42,6 +49,9 @@ export class CloudinaryService {
   }
 
   async deleteImage(imageUrl: string): Promise<void> {
+    if (typeof imageUrl !== 'string' || !imageUrl) {
+      throw new BadRequestException('Rasm manzili yuborilmadi');
+    }
     const parts = imageUrl.split('/');
     const filename = parts[parts.length - 1].split('.')[0];
     const folder = parts[parts.length - 2];

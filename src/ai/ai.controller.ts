@@ -1,26 +1,19 @@
-import { Body, Controller, Post, Request, UseGuards } from '@nestjs/common';
+import {
+  BadRequestException,
+  Body,
+  Controller,
+  Post,
+  Request,
+  UseGuards,
+} from '@nestjs/common';
 import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { RolesGuard } from '../auth/guards/roles.guard';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { AiService } from './ai.service';
 
-// Render Cloudflare ortida turadi — req.ip proxy manzilini beradi,
-// shuning uchun haqiqiy mijoz IP sini headerlardan olamiz
-function clientIp(req: any): string {
-  const h = req.headers ?? {};
-  const xff = String(h['x-forwarded-for'] ?? '')
-    .split(',')
-    .map((s) => s.trim())
-    .filter(Boolean);
-  return (
-    h['cf-connecting-ip'] ??
-    h['true-client-ip'] ??
-    xff[xff.length - 1] ??
-    req.ip ??
-    'unknown'
-  );
-}
+import { clientIp } from '../common/client-ip';
+import { RateLimit } from '../common/rate-limit';
 
 @ApiTags('AI')
 @ApiBearerAuth()
@@ -36,13 +29,23 @@ export class AiController {
     return this.aiService.generateExcerpt(body.title, body.text);
   }
 
-  // Login qilganlar — cheksiz; mehmonlar — kuniga 3 ta savol (IP bo'yicha)
+  // Mehmonlar — kuniga 3 ta savol (IP bo'yicha); login qilganlar — amalda
+  // cheksiz (kuniga 100 ta: bitta akkaunt AI limitini yeb qo'ymasin)
+  @RateLimit(20, 60, "Juda tez so'rayapsiz. Bir daqiqadan so'ng urinib ko'ring.")
   @Post('explain')
   async explain(
     @Body() body: { text: string; question: string; history?: any[] },
     @Request() req: any,
   ) {
+    if (
+      typeof body?.question !== 'string' ||
+      !body.question.trim() ||
+      (body.text !== undefined && typeof body.text !== 'string')
+    ) {
+      throw new BadRequestException('Savol kiritilmagan');
+    }
     const ip = req.user ? null : clientIp(req);
+    if (req.user) this.aiService.consumeUserQuota(req.user.userId);
     const guestRemaining =
       ip === null ? undefined : this.aiService.consumeGuestQuota(ip);
 

@@ -33,6 +33,9 @@ const { BookmarksModule } = require(BE + "dist/bookmarks/bookmarks.module");
 const { CommentsModule } = require(BE + "dist/comments/comments.module");
 const { HealthModule } = require(BE + "dist/health/health.module");
 
+// Obunani bekor qilish imzosi process.env dan o'qiladi
+process.env.JWT_SECRET ??= "dev-secret";
+
 const CONTENT_PORT = 3398;
 const contents = new Map();
 http

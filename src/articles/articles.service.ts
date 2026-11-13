@@ -185,7 +185,8 @@ export class ArticlesService {
       return [];
     }
 
-    const q = `%${query.trim()}%`;
+    // % va _ foydalanuvchi matnida oddiy belgi bo'lsin (LIKE maxsus belgilari)
+    const q = `%${query.trim().slice(0, 100).replace(/[\\%_]/g, '\\$&')}%`;
 
     return this.articleModel.findAll({
       where: {

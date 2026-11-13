@@ -2,6 +2,8 @@
 import { Injectable, Logger } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import * as nodemailer from 'nodemailer';
+import { escHtml, safeUrl } from '../common/html';
+import { unsubscribeToken, unsubscribeUrl } from '../common/unsubscribe-token';
 
 @Injectable()
 export class MailerService {
@@ -27,7 +29,16 @@ export class MailerService {
     excerpt: string,
     coverImage: string,
   ) {
-    const articleUrl = `https://bilimmanba.uz/articles/${articleSlug}`;
+    const articleUrl = `https://bilimmanba.uz/articles/${encodeURIComponent(articleSlug)}`;
+    // Matnlar HTML ichiga faqat tozalangan holda qo'yiladi
+    const title = escHtml(articleTitle);
+    const cover = safeUrl(coverImage);
+    const unsubUrl = unsubscribeUrl(to);
+    const apiBase = (
+      this.config.get<string>('API_URL') ??
+      'https://bilim-manba-backend.onrender.com/api'
+    ).replace(/\/$/, '');
+    const oneClickUrl = `${apiBase}/subscribers/unsubscribe?email=${encodeURIComponent(to)}&token=${unsubscribeToken(to)}`;
 
     const html = `
 <!DOCTYPE html>
@@ -54,15 +65,15 @@ export class MailerService {
     <div class="header">
       <h1>Bilim Manba</h1>
     </div>
-    ${coverImage ? `<img src="${coverImage}" alt="${articleTitle}" class="cover" />` : ''}
+    ${cover ? `<img src="${cover}" alt="${title}" class="cover" />` : ''}
     <div class="body">
-      <h2>${articleTitle}</h2>
-      ${excerpt ? `<p>${excerpt}</p>` : ''}
+      <h2>${title}</h2>
+      ${excerpt ? `<p>${escHtml(excerpt)}</p>` : ''}
       <a href="${articleUrl}" class="btn">Maqolani o'qish →</a>
     </div>
     <div class="footer">
       <p>Siz Bilim Manba yangiliklar ro'yxatiga obuna bo'lgansiz.</p>
-      <p><a href="https://bilimmanba.uz/unsubscribe?email=${to}">Obunani bekor qilish</a></p>
+      <p><a href="${escHtml(unsubUrl)}">Obunani bekor qilish</a></p>
     </div>
   </div>
 </body>
@@ -72,8 +83,12 @@ export class MailerService {
       await this.transporter.sendMail({
         from: `"Bilim Manba" <${this.config.get('MAIL_USER')}>`,
         to,
-        subject: `📚 Yangi maqola: ${articleTitle}`,
+        subject: `📚 Yangi maqola: ${String(articleTitle).replace(/[\r\n]+/g, ' ')}`,
         html,
+        headers: {
+          'List-Unsubscribe': `<${oneClickUrl}>, <${unsubUrl}>`,
+          'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
+        },
       });
     } catch (error) {
       this.logger.error(`Email yuborishda xato ${to}: ${error?.message}`);
@@ -105,9 +120,9 @@ export class MailerService {
       <h1>🔐 Bilim Manba</h1>
     </div>
     <div class="body">
-      <h2>Salom, ${name}!</h2>
+      <h2>Salom, ${escHtml(name)}!</h2>
       <p>Parolingizni tiklash uchun quyidagi tugmani bosing. Bu havola <strong>1 soat</strong> davomida amal qiladi.</p>
-      <a href="${resetUrl}" class="btn">Parolni tiklash →</a>
+      <a href="${safeUrl(resetUrl)}" class="btn">Parolni tiklash →</a>
       <p class="note">Agar siz bu so'rovni yuborмаган bo'lsangiz, ushbu xatni e'tiborsiz qoldiring.</p>
     </div>
     <div class="footer">

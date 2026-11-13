@@ -188,6 +188,9 @@ export class DataMigrationsService implements OnModuleInit {
       'CREATE INDEX IF NOT EXISTS analytics_events_created_idx ON analytics_events ("createdAt")',
     );
     // Email qaysi formada (ro'yxatdan o'tish / pastdagi obuna ...) va qaysi sahifada kiritilgan
+    await this.sequelize.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS "passwordChangedAt" TIMESTAMPTZ',
+    );
     for (const table of ['users', 'subscribers']) {
       await this.sequelize.query(
         `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS "signupSource" VARCHAR(60)`,

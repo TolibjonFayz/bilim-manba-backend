@@ -12,6 +12,8 @@ import Groq from 'groq-sdk';
 const GUEST_DAILY_LIMIT = 3;
 // Xarajat himoyasi: barcha mehmonlar uchun jami kunlik savollar
 const GUEST_GLOBAL_DAILY_LIMIT = 500;
+// Kirgan foydalanuvchi uchun kunlik chegara (oddiy o'quvchi yetib bormaydi)
+const USER_DAILY_LIMIT = 100;
 
 const MAX_TEXT = 6000;
 const MAX_QUESTION = 500;
@@ -29,6 +31,7 @@ export class AiService {
   private guestDay = '';
   private guestCounts = new Map<string, number>();
   private guestTotal = 0;
+  private userCounts = new Map<number, number>();
 
   constructor(private config: ConfigService) {
     this.groq = new Groq({
@@ -45,6 +48,7 @@ export class AiService {
     if (today !== this.guestDay) {
       this.guestDay = today;
       this.guestCounts.clear();
+      this.userCounts.clear();
       this.guestTotal = 0;
     }
 
@@ -66,6 +70,28 @@ export class AiService {
     this.guestCounts.set(ip, used + 1);
     this.guestTotal++;
     return GUEST_DAILY_LIMIT - used - 1;
+  }
+
+  /** Kirgan foydalanuvchining kunlik savollari */
+  consumeUserQuota(userId: number) {
+    const today = new Date().toISOString().slice(0, 10);
+    if (today !== this.guestDay) {
+      this.guestDay = today;
+      this.guestCounts.clear();
+      this.userCounts.clear();
+      this.guestTotal = 0;
+    }
+    const used = this.userCounts.get(userId) ?? 0;
+    if (used >= USER_DAILY_LIMIT) {
+      throw new HttpException(
+        {
+          code: 'USER_LIMIT',
+          message: `Bugungi savollar chegarasiga yetdingiz (${USER_DAILY_LIMIT} ta). Ertaga davom ettirishingiz mumkin.`,
+        },
+        HttpStatus.TOO_MANY_REQUESTS,
+      );
+    }
+    this.userCounts.set(userId, used + 1);
   }
 
   /** AI xato bersa, mehmonning savoli hisobdan qaytariladi */

@@ -13,18 +13,18 @@ import { User } from 'src/users/models/user.model';
 @Table({ tableName: 'comments', timestamps: true })
 export class Comment extends Model {
   @Column({ type: DataType.TEXT, allowNull: false })
-  content: string;
+  declare content: string;
 
   @ForeignKey(() => User)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  userId: number;
+  declare userId: number;
 
   @BelongsTo(() => User)
   user: User;
 
   @ForeignKey(() => Article)
   @Column({ type: DataType.INTEGER, allowNull: false })
-  articleId: number;
+  declare articleId: number;
 
   @BelongsTo(() => Article)
   article: Article;
@@ -32,7 +32,7 @@ export class Comment extends Model {
   // Javob bo'lsa — parent comment id (top-level bo'lsa null)
   @ForeignKey(() => Comment)
   @Column({ type: DataType.INTEGER, allowNull: true })
-  parentId: number | null;
+  declare parentId: number | null;
 
   @HasMany(() => Comment, 'parentId')
   replies: Comment[];

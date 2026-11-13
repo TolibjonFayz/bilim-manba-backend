@@ -4,6 +4,7 @@ import {
   IsOptional,
   IsInt,
   MaxLength,
+  Min,
 } from 'class-validator';
 
 export class CreateCommentDto {
@@ -14,5 +15,6 @@ export class CreateCommentDto {
 
   @IsOptional()
   @IsInt()
+  @Min(1)
   parentId?: number;
 }

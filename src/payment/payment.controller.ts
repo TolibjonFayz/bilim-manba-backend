@@ -9,6 +9,7 @@ import { ApiTags } from '@nestjs/swagger';
 import { ConfigService } from '@nestjs/config';
 import { PaymentService } from './payment.service';
 import { PaymeRequestDto } from './dto/payme.dto';
+import { timingSafeEqual } from 'crypto';
 
 @ApiTags('Payme')
 @Controller('payment/payme')
@@ -24,12 +25,19 @@ export class PaymeController {
 
   @Post()
   async handle(
-    @Body() body: PaymeRequestDto,
+    // Turi ataylab "unknown": global ValidationPipe (whitelist) dekoratorsiz
+    // PaymeRequestDto maydonlarini o'chirib yuborardi va har so'rov
+    // "Metod topilmadi" bilan tugardi
+    @Body() raw: unknown,
     @Headers('authorization') auth: string,
   ) {
+    const body = (raw ?? {}) as PaymeRequestDto;
     // Payme dan kelgan so'rovni tekshiramiz
     if (!this.checkAuth(auth)) {
-      return this.error(body.id, -32504, 'Avtorizatsiya xatosi');
+      return this.error(body?.id, -32504, 'Avtorizatsiya xatosi');
+    }
+    if (!body || typeof body.params !== 'object' || body.params === null) {
+      return this.error(body?.id, -32600, "So'rov noto'g'ri");
     }
 
     // Qaysi metod kelganiga qarab ishlaymiz
@@ -56,9 +64,15 @@ export class PaymeController {
       ? this.config.get('PAYME_TEST_SECRET_KEY')
       : this.config.get('PAYME_SECRET_KEY');
     const merchantId = this.config.get('PAYME_MERCHANT_ID');
+    // Kalit sozlanmagan bo'lsa hech kim o'tmaydi (aks holda "undefined:undefined"
+    // bilan kirib, o'ziga premium berib olish mumkin bo'lardi)
+    if (!key || !merchantId || typeof auth !== 'string') return false;
 
-    const expected = Buffer.from(`${merchantId}:${key}`).toString('base64');
-    return auth === `Basic ${expected}`;
+    const expected = Buffer.from(
+      `Basic ${Buffer.from(`${merchantId}:${key}`).toString('base64')}`,
+    );
+    const given = Buffer.from(auth);
+    return expected.length === given.length && timingSafeEqual(expected, given);
   }
 
   // 1. To'lov qilsa bo'ladimi?
@@ -93,11 +107,21 @@ export class PaymeController {
     if (!this.paymentService.validateAmount(amount!)) {
       return this.error(body.id, -31001, "Summa noto'g'ri");
     }
+    const userId = Number(account?.user_id);
+    if (
+      typeof id !== 'string' ||
+      !id ||
+      !Number.isInteger(userId) ||
+      userId <= 0 ||
+      !(await this.paymentService.userExists(userId))
+    ) {
+      return this.error(body.id, -31050, 'Foydalanuvchi topilmadi');
+    }
 
     // Yangi tranzaksiya saqlaymiz
     this.transactions.set(id!, {
       id,
-      userId: account!.user_id,
+      userId,
       amount,
       state: 1, // 1 = yaratildi
       createTime: time,

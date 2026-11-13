@@ -358,7 +358,11 @@ export class AdminController {
   }
 
   @Post('upload/image')
-  @UseInterceptors(FileInterceptor('file', { storage: memoryStorage() }))
+  @UseInterceptors(FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 6 * 1024 * 1024, files: 1 },
+    }),
+  )
   uploadImage(@UploadedFile() file: Express.Multer.File) {
     return this.adminService.uploadImage(file);
   }
