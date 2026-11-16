@@ -12,6 +12,9 @@ import * as bcrypt from 'bcryptjs';
 import * as crypto from 'crypto';
 import { AnalyticsService } from 'src/analytics/analytics.service';
 import { takeToken, tooMany } from '../common/rate-limit';
+import { verifyGoogleIdToken } from './google-token';
+import { GoogleLoginDto } from './dto/google-login.dto';
+import { ConfigService } from '@nestjs/config';
 
 // Mavjud bo'lmagan email uchun ham parol solishtiriladi — javob vaqti
 // bo'yicha "bu email ro'yxatda bor/yo'q" ni bilib bo'lmasin
@@ -28,7 +31,66 @@ export class AuthService {
     private jwtService: JwtService,
     private mailerService: MailerService,
     private analytics: AnalyticsService,
+    private config: ConfigService,
   ) {}
+
+  private get googleClientId() {
+    return (this.config.get<string>('GOOGLE_CLIENT_ID') ?? '').trim();
+  }
+
+  googleConfig() {
+    return { enabled: Boolean(this.googleClientId), clientId: this.googleClientId || null };
+  }
+
+  /**
+   * Google ID token tekshiriladi; shu email bilan akkaunt bo'lsa — kiradi,
+   * bo'lmasa yangi akkaunt ochiladi (parolsiz: tasodifiy parol xeshi, xohlasa
+   * "Parolni unutdingizmi" orqali parol qo'yadi).
+   */
+  async google(dto: GoogleLoginDto) {
+    if (!this.googleClientId) {
+      throw new BadRequestException('Google bilan kirish hali yoqilmagan');
+    }
+    let profile;
+    try {
+      profile = await verifyGoogleIdToken(dto.credential, this.googleClientId);
+    } catch (err: any) {
+      throw new UnauthorizedException(
+        `Google orqali kirib bo'lmadi: ${err?.message ?? 'xato'}`,
+      );
+    }
+
+    let user = await this.usersService.findByEmailInsensitive(profile.email);
+    let isNew = false;
+    if (!user) {
+      const random = crypto.randomBytes(32).toString('hex');
+      user = await this.usersService.create({
+        fullName: (profile.name || profile.email.split('@')[0]).slice(0, 80),
+        email: profile.email,
+        password: await bcrypt.hash(random, 10),
+      });
+      isNew = true;
+      await this.analytics.markSignup(
+        'users',
+        user.id,
+        dto.signupSource ?? 'google',
+        dto.signupPath,
+      );
+    }
+    if (user.dataValues.isActive === false) {
+      throw new UnauthorizedException('Akkaunt bloklangan');
+    }
+    return {
+      userId: user.id,
+      isNew,
+      token: this.signToken(
+        user.id,
+        user.dataValues.email,
+        user.dataValues.role,
+        user.dataValues.plan,
+      ),
+    };
+  }
 
   async register(dto: RegisterDto) {
     const existing = await this.usersService.findByEmail(dto.email);

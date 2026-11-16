@@ -355,6 +355,14 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
         geminiFallbacks: this.config.get<string>('GEMINI_FALLBACK_MODELS'),
         groqKey: this.config.get<string>('GROQ_API_KEY'),
         groqModel: this.config.get<string>('GROQ_MODEL'),
+        // Claude faqat yoqilganda (AI_WRITER=claude): kalitning o'zi yetmaydi,
+        // hisobda pul bo'lmasa har qoralama avval xato berib, keyin Gemini'ga o'tardi
+        claudeKey:
+          this.config.get<string>('AI_WRITER') === 'claude'
+            ? this.config.get<string>('ANTHROPIC_API_KEY')
+            : undefined,
+        claudeModel: this.config.get<string>('ANTHROPIC_MODEL'),
+        claudeEffort: this.config.get<string>('ANTHROPIC_EFFORT'),
       })
     );
   }

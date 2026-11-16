@@ -187,23 +187,82 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
       this.logger.error(`Bildirishnomalar yuborilmadi: ${err?.message}`);
     }
 
+    // Fonda: obunachilar ko'p bo'lsa nashr javobini kutdirmasin
+    void this.sendNewsletter(article);
+    return { telegram, instagram };
+  }
+
+  /**
+   * Obunachilarga "yangi maqola" xati — birma-bir (pochta xizmatlari bir
+   * vaqtda ko'p xatni rad etadi). Natija app_settings'ga yoziladi, admin
+   * panelda ko'rinadi (avval xatlar jimgina ketmay qolgan edi).
+   */
+  async sendNewsletter(article: Article) {
+    let sent = 0;
+    let failed = 0;
+    let total = 0;
+    this.mailer.lastError = null;
     try {
       const subs = await this.subscribers.getAllActive();
-      await Promise.allSettled(
-        subs.map((s: any) =>
-          this.mailer.sendNewArticleEmail(
+      total = subs.length;
+      if (this.mailer.configured) {
+        for (const s of subs as any[]) {
+          const ok = await this.mailer.sendNewArticleEmail(
             s.email,
             article.title,
             article.slug,
             article.excerpt,
             article.coverImage,
-          ),
-        ),
-      );
+          );
+          if (ok) sent++;
+          else failed++;
+          await new Promise((r) => setTimeout(r, 600));
+        }
+      }
     } catch (err: any) {
+      this.mailer.lastError = String(err?.message ?? err).slice(0, 300);
       this.logger.error(`Email obunachilarga yuborilmadi: ${err?.message}`);
     }
-    return { telegram, instagram };
+    const result = {
+      at: new Date().toISOString(),
+      title: article.title,
+      total,
+      sent,
+      failed,
+      configured: this.mailer.configured,
+      error: this.mailer.configured
+        ? this.mailer.lastError
+        : 'Pochta sozlanmagan (MAIL_HOST)',
+    };
+    if (total && sent === 0) {
+      this.logger.error(
+        `Yangi maqola xati hech kimga ketmadi (${total} obunachi): ${result.error}`,
+      );
+    }
+    await this.articleModel.sequelize
+      ?.query(
+        `INSERT INTO app_settings (key, value, "updatedAt") VALUES ('newsletter_last', :v, now())
+         ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, "updatedAt" = now()`,
+        { replacements: { v: JSON.stringify(result) } },
+      )
+      .catch(() => {});
+    return result;
+  }
+
+  /** Admin panel: pochta holati va oxirgi tarqatma natijasi */
+  async mailStatus() {
+    const [status, subs, last] = await Promise.all([
+      this.mailer.status(),
+      this.subscribers.getAllActive().then((r) => r.length).catch(() => null),
+      this.articleModel.sequelize
+        ?.query<{ value: string }>(
+          `SELECT value FROM app_settings WHERE key = 'newsletter_last'`,
+          { type: 'SELECT' as any },
+        )
+        .then((r: any[]) => (r[0]?.value ? JSON.parse(r[0].value) : null))
+        .catch(() => null),
+    ]);
+    return { ...status, subscribers: subs, lastNewsletter: last ?? null };
   }
 
   /**

@@ -191,6 +191,9 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS "passwordChangedAt" TIMESTAMPTZ',
     );
+    await this.sequelize.query(
+      'ALTER TABLE articles ADD COLUMN IF NOT EXISTS attachments JSONB',
+    );
     for (const table of ['users', 'subscribers']) {
       await this.sequelize.query(
         `ALTER TABLE ${table} ADD COLUMN IF NOT EXISTS "signupSource" VARCHAR(60)`,

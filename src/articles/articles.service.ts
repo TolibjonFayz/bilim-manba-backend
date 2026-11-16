@@ -54,7 +54,7 @@ export class ArticlesService {
   private queryAll(categorySlug?: string) {
     return this.articleModel.findAll({
       where: { status: ArticleStatus.PUBLISHED },
-      attributes: { exclude: ['content'] },
+      attributes: { exclude: ['content', 'attachments'] },
       include: [
         {
           model: Category,
@@ -198,7 +198,7 @@ export class ArticlesService {
           { tags: { [Op.iLike]: q } },
         ],
       },
-      attributes: { exclude: ['content'] },
+      attributes: { exclude: ['content', 'attachments'] },
       include: [
         { model: Category, attributes: ['id', 'name', 'slug', 'icon'] },
         { model: User, attributes: ['id', 'fullName'] },

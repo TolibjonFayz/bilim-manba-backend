@@ -1,4 +1,8 @@
-import { BadRequestException, Injectable } from '@nestjs/common';
+import {
+  BadRequestException,
+  Injectable,
+  ServiceUnavailableException,
+} from '@nestjs/common';
 import { InjectModel } from '@nestjs/sequelize';
 import { User } from '../users/models/user.model';
 import { Like } from '../likes/models/like.model';
@@ -9,6 +13,16 @@ import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { PublishingService } from 'src/publishing/publishing.service';
 import { QuizService } from 'src/quiz/quiz.service';
+import {
+  ATTACHMENT_TYPES,
+  MAX_ATTACHMENT_BYTES,
+  cleanFileName,
+  fileExt,
+  keySafe,
+  looksLike,
+  sanitizeAttachments,
+} from 'src/common/attachments';
+import { randomBytes } from 'crypto';
 
 @Injectable()
 export class AdminService {
@@ -67,6 +81,10 @@ export class AdminService {
 
       const article = await this.articleModel.create({
         ...dto,
+        attachments: sanitizeAttachments(
+          dto?.attachments,
+          this.cloudflareService.filesBaseUrl,
+        ),
         slug,
         scheduledAt: this.parseSchedule(dto),
       });
@@ -90,6 +108,12 @@ export class AdminService {
   async updateArticle(id: number, dto: any) {
     const before = await this.articleModel.findByPk(id);
     const { status, ...rest } = dto ?? {};
+    if ('attachments' in rest) {
+      rest.attachments = sanitizeAttachments(
+        rest.attachments,
+        this.cloudflareService.filesBaseUrl,
+      );
+    }
     if ('scheduledAt' in rest) {
       // Chop etilgan maqolaga vaqt kerak emas
       rest.scheduledAt =
@@ -188,6 +212,47 @@ export class AdminService {
   async uploadImage(file: Express.Multer.File) {
     const url = await this.cloudinaryService.uploadImage(file);
     return { url };
+  }
+
+  /** Maqolaga biriktiriladigan fayl → R2 files/ papkasi */
+  async uploadFile(file: Express.Multer.File) {
+    if (!file?.buffer?.length) {
+      throw new BadRequestException('Fayl yuborilmadi');
+    }
+    if (file.size > MAX_ATTACHMENT_BYTES) {
+      throw new BadRequestException("Fayl 40 MB dan katta bo'lmasin");
+    }
+    // Multer nomni latin1 deb o'qiydi — o'zbekcha/kirill nomlar buzilmasin
+    const original = cleanFileName(
+      Buffer.from(file.originalname ?? '', 'latin1').toString('utf8'),
+    );
+    const ext = fileExt(original);
+    const type = ATTACHMENT_TYPES[ext];
+    if (!type) {
+      throw new BadRequestException(
+        `Bu turdagi fayl qabul qilinmaydi. Ruxsat: ${Object.keys(ATTACHMENT_TYPES).join(', ')}`,
+      );
+    }
+    if (!looksLike(ext, file.buffer)) {
+      throw new BadRequestException(
+        `Fayl mazmuni .${ext} ga o'xshamaydi — boshqa fayl tanlang`,
+      );
+    }
+    const key = `files/${Date.now()}-${randomBytes(4).toString('hex')}-${keySafe(original)}`;
+    let url: string;
+    try {
+      url = await this.cloudflareService.uploadFile(
+        file.buffer,
+        key,
+        type,
+        original,
+      );
+    } catch (err: any) {
+      throw new ServiceUnavailableException(
+        `Faylni omborga (R2) yuklab bo'lmadi: ${String(err?.message ?? err).slice(0, 200)}`,
+      );
+    }
+    return { name: original, url, size: file.size, ext };
   }
 
   async uploadContent(text: string, filename: string) {

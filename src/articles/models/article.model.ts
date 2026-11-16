@@ -73,6 +73,11 @@ export class Article extends Model {
   @Column({ type: DataType.STRING, allowNull: true })
   declare tags: string;
 
+  // Biriktirilgan fayllar: [{ name, url, size, ext }] (R2). Ustun
+  // DataMigrationsService.ensureSchema orqali qo'shiladi.
+  @Column({ type: DataType.JSONB, allowNull: true })
+  declare attachments: { name: string; url: string; size: number; ext: string }[] | null;
+
   @ForeignKey(() => Category)
   @Column({ type: DataType.INTEGER })
   declare categoryId: number;

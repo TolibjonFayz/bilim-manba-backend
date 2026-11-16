@@ -1,0 +1,218 @@
+// 2026-11 yangi imkoniyatlar: Google bilan kirish, maqolaga fayl biriktirish,
+// Instagram → Telegram (har N kunda), email holati va tarqatma natijasi.
+// Tashqi xizmatlar (Google, Instagram, Telegram, R2, SMTP) — soxta.
+import { PGlite } from "@electric-sql/pglite";
+import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
+import { createRequire } from "module";
+import { fileURLToPath } from "url";
+import { generateKeyPairSync, createSign } from "crypto";
+
+const BE = fileURLToPath(new URL("../../", import.meta.url));
+process.chdir(BE);
+const require = createRequire(BE + "package.json");
+require("reflect-metadata");
+const { Test } = require("@nestjs/testing");
+const { SequelizeModule } = require("@nestjs/sequelize");
+const { ConfigModule } = require("@nestjs/config");
+const { ValidationPipe } = require("@nestjs/common");
+const bcrypt = require("bcryptjs");
+const { DatabaseModule } = require(BE + "dist/database/database.module");
+const { AdminModule } = require(BE + "dist/admin/admin.module");
+const { AdminService } = require(BE + "dist/admin/admin.service");
+const { ArticlesModule } = require(BE + "dist/articles/articles.module");
+const { AuthModule } = require(BE + "dist/auth/auth.module");
+const { UsersModule } = require(BE + "dist/users/users.module");
+const { CloudflareService } = require(BE + "dist/cloudflare/cloudflare.service");
+const { PublishingService } = require(BE + "dist/publishing/publishing.service");
+const { IgRepostService } = require(BE + "dist/publishing/ig-repost.service");
+const { InstagramService } = require(BE + "dist/publishing/instagram.service");
+const { TelegramService } = require(BE + "dist/publishing/telegram.service");
+const { MailerService } = require(BE + "dist/mailer/mailer.service");
+const { DraftsService } = require(BE + "dist/drafts/drafts.service");
+const { QuizService } = require(BE + "dist/quiz/quiz.service");
+const { ChannelQuizService } = require(BE + "dist/publishing/channel-quiz.service");
+const { verifyGoogleIdToken, resetGoogleKeyCache } = require(BE + "dist/auth/google-token");
+const { sanitizeAttachments, looksLike, keySafe, cleanFileName } = require(BE + "dist/common/attachments");
+const { resetRateLimits } = require(BE + "dist/common/rate-limit");
+
+let fails = 0;
+const check = (name, ok, extra = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`); if (!ok) fails++; };
+
+// ---------- 1) Google ID token ----------
+const CLIENT = "123-test.apps.googleusercontent.com";
+const { privateKey, publicKey } = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const jwk = { ...publicKey.export({ format: "jwk" }), kid: "k1", alg: "RS256", use: "sig" };
+const other = generateKeyPairSync("rsa", { modulusLength: 2048 });
+const b64 = (o) => Buffer.from(JSON.stringify(o)).toString("base64url");
+const now = Math.floor(Date.now() / 1000);
+const sign = (payload, { kid = "k1", key = privateKey, alg = "RS256" } = {}) => {
+  const h = b64({ alg, kid, typ: "JWT" }), p = b64(payload);
+  const s = createSign("RSA-SHA256").update(`${h}.${p}`).sign(key).toString("base64url");
+  return `${h}.${p}.${s}`;
+};
+const good = (o = {}) => ({ iss: "https://accounts.google.com", aud: CLIENT, sub: "g-1", email: "Ali.Google@Gmail.com", email_verified: true, name: "Ali Google", iat: now, exp: now + 3600, ...o });
+let certFetches = 0;
+const fetcher = async () => { certFetches++; return { keys: [jwk], maxAge: 3600 }; };
+const vt = (t, o) => verifyGoogleIdToken(t, CLIENT, fetcher, o);
+const rejects = async (p) => { try { await p; return null; } catch (e) { return e.message; } };
+
+const prof = await vt(sign(good()));
+check("google: to'g'ri token → profil (email kichik harf)", prof.email === "ali.google@gmail.com" && prof.name === "Ali Google" && prof.sub === "g-1");
+check("google: kalitlar keshlanadi", (await vt(sign(good()))) && certFetches === 1);
+check("google: boshqa ilova (aud) → rad", /boshqa ilova/.test(await rejects(vt(sign(good({ aud: "boshqa" }))))));
+check("google: muddati o'tgan → rad", /muddati/.test(await rejects(vt(sign(good({ exp: now - 600 }))))));
+check("google: noto'g'ri beruvchi → rad", /beruvchi/.test(await rejects(vt(sign(good({ iss: "evil.com" }))))));
+check("google: email tasdiqlanmagan → rad", /tasdiqlanmagan/.test(await rejects(vt(sign(good({ email_verified: false }))))));
+check("google: boshqa kalit imzolagan → rad", /imzosi/.test(await rejects(vt(sign(good(), { key: other.privateKey })))));
+check("google: noma'lum kid → kalitlar yangilanadi, keyin rad", /kaliti topilmadi/.test(await rejects(vt(sign(good(), { kid: "zz" })))) && certFetches === 2);
+check("google: alg none / HS256 → rad", /algoritmi/.test(await rejects(vt(`${b64({ alg: "none", kid: "k1" })}.${b64(good())}.`))) && /algoritmi/.test(await rejects(vt(sign(good(), { alg: "HS256" })))));
+const parts = sign(good()).split(".");
+check("google: payload o'zgartirilsa → rad", /imzosi/.test(await rejects(vt(`${parts[0]}.${b64(good({ email: "admin@bilimmanba.uz" }))}.${parts[2]}`))));
+check("google: buzuq token → rad", !!(await rejects(vt("abc"))) && !!(await rejects(vt("a.b.c"))));
+
+// ---------- 2) Fayllar: sof funksiyalar ----------
+const R2 = "https://pub-test.r2.dev";
+check("fayl: o'z omborimizdagi pdf qabul", sanitizeAttachments([{ name: "Kitob.pdf", url: `${R2}/files/1-kitob.pdf`, size: 1000 }], R2)[0].ext === "pdf");
+check("fayl: begona manzil → 400", !!(await rejects((async () => sanitizeAttachments([{ name: "x.pdf", url: "https://evil.com/files/x.pdf" }], R2))())));
+check("fayl: ombor ichida boshqa papka → 400", !!(await rejects((async () => sanitizeAttachments([{ name: "x.json", url: `${R2}/articles/x.json` }], R2))())));
+check("fayl: .html/.exe ruxsat yo'q", !!(await rejects((async () => sanitizeAttachments([{ name: "x.html", url: `${R2}/files/x.html` }], R2))())));
+check("fayl: bo'sh ro'yxat → null; 11 ta → 400", sanitizeAttachments([], R2) === null && !!(await rejects((async () => sanitizeAttachments(Array(11).fill({ name: "a.pdf", url: `${R2}/files/a.pdf` }), R2))())));
+check("fayl nomi: yo'l va xavfli belgilar olib tashlanadi", cleanFileName('C:\\x\\..\\<b>"Kitob".pdf') === 'bKitob/b.pdf'.replace("/", "") || !/[\\/<>"]/.test(cleanFileName('..\\<b>"Kitob".pdf')));
+check("R2 kaliti: lotin, kichik harf", /^[a-z0-9-]+\.pdf$/.test(keySafe("O'zbek tili Darslik №1.PDF")), keySafe("O'zbek tili Darslik №1.PDF"));
+check("magic: pdf/zip/eski office", looksLike("pdf", Buffer.from("%PDF-1.7")) && !looksLike("pdf", Buffer.from("<html>")) && looksLike("docx", Buffer.from("PK\x03\x04")) && looksLike("txt", Buffer.from("salom")));
+
+// ---------- 3) Nest ilova ----------
+const db = await PGlite.create();
+const server = new PGLiteSocketServer({ db, port: 5541, host: "127.0.0.1" });
+await server.start();
+const mod = await Test.createTestingModule({
+  imports: [
+    ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ JWT_SECRET: "features-secret-0123456789abcdef0123", JWT_EXPIRES_IN: "7d", GOOGLE_CLIENT_ID: CLIENT, CF_R2_PUBLIC_URL: R2, TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHANNEL_ID: "@kanal", INSTAGRAM_ACCESS_TOKEN: "IGtest" })] }),
+    SequelizeModule.forRoot({ dialect: "postgres", host: "127.0.0.1", port: 5541, username: "postgres", password: "postgres", database: "postgres", autoLoadModels: true, synchronize: true, logging: false, pool: { max: 1 } }),
+    DatabaseModule, AuthModule, UsersModule, ArticlesModule, AdminModule,
+  ],
+}).compile();
+const app = mod.createNestApplication({ logger: ["error"] });
+app.setGlobalPrefix("api");
+app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
+await app.init();
+clearTimeout(app.get(QuizService).timer); clearTimeout(app.get(DraftsService).timer); clearTimeout(app.get(ChannelQuizService).timer);
+const ig = app.get(IgRepostService); clearTimeout(ig.timer);
+await app.listen(0);
+const BASE = `http://127.0.0.1:${app.getHttpServer().address().port}/api`;
+
+// Google kalitlari va boshqa tashqi so'rovlar — soxta fetch
+const realFetch = globalThis.fetch;
+globalThis.fetch = async (url, opts) => {
+  const u = String(url);
+  if (u.startsWith("https://www.googleapis.com/oauth2/v3/certs")) return new Response(JSON.stringify({ keys: [jwk] }), { headers: { "cache-control": "max-age=600" } });
+  return realFetch(url, opts);
+};
+resetGoogleKeyCache();
+
+let ipN = 0;
+const call = async (method, path, { body, token, form } = {}) => {
+  const res = await realFetch(BASE + path, {
+    method,
+    headers: { ...(form ? {} : { "content-type": "application/json" }), "cf-connecting-ip": `10.9.0.${++ipN % 250}`, ...(token ? { authorization: `Bearer ${token}` } : {}) },
+    body: form ?? (body === undefined ? undefined : JSON.stringify(body)),
+  });
+  let data = null; try { data = await res.json(); } catch {}
+  return { status: res.status, data };
+};
+
+check("google/config: yoqilgan, client id ochiq", (await call("GET", "/auth/google/config")).data?.clientId === CLIENT);
+const g1 = await call("POST", "/auth/google", { body: { credential: sign(good()) } });
+check("google: yangi foydalanuvchi ochiladi va token beriladi", g1.status === 201 && g1.data.isNew === true && !!g1.data.token?.access_token);
+check("google: token bilan /auth/me ishlaydi", (await call("GET", "/auth/me", { token: g1.data.token.access_token })).data?.email === "ali.google@gmail.com");
+const g2 = await call("POST", "/auth/google", { body: { credential: sign(good()) } });
+check("google: ikkinchi marta — o'sha akkaunt", g2.data.userId === g1.data.userId && g2.data.isNew === false);
+await db.query(`INSERT INTO users ("fullName", email, password, role, plan, "createdAt", "updatedAt") VALUES ('Vali', 'Vali@Test.uz', $1, 'user', 'free', now(), now())`, [bcrypt.hashSync("parol123", 4)]);
+const g3 = await call("POST", "/auth/google", { body: { credential: sign(good({ sub: "g-2", email: "vali@test.uz", name: "Vali G" })) } });
+check("google: parol bilan ochilgan akkauntga ulanadi (email bir xil)", g3.status === 201 && g3.data.isNew === false && (await db.query(`SELECT COUNT(*)::int n FROM users WHERE lower(email)='vali@test.uz'`)).rows[0].n === 1);
+check("google: parol bilan kirish ham ishlayveradi", (await call("POST", "/auth/login", { body: { email: "Vali@Test.uz", password: "parol123" } })).status === 201);
+check("google: soxta token → 401", (await call("POST", "/auth/google", { body: { credential: sign(good(), { key: other.privateKey }) } })).status === 401);
+check("google: credential'siz → 400", (await call("POST", "/auth/google", { body: {} })).status === 400);
+check("google: yangi akkaunt — admin emas", (await db.query(`SELECT role FROM users WHERE id=$1`, [g1.data.userId])).rows[0].role === "user");
+resetRateLimits();
+
+// --- Fayl yuklash va maqolaga biriktirish ---
+await db.query(`INSERT INTO users ("fullName", email, password, role, plan, "createdAt", "updatedAt") VALUES ('Admin', 'admin@test.uz', $1, 'admin', 'free', now(), now())`, [bcrypt.hashSync("admin123", 4)]);
+const adminTok = (await call("POST", "/auth/login", { body: { email: "admin@test.uz", password: "admin123" } })).data.token.access_token;
+const userTok = g1.data.token.access_token;
+const uploads = [];
+const cf = app.get(CloudflareService);
+cf.publicUrl = R2;
+cf.uploadFile = async (body, key, type, name) => { uploads.push({ key, type, name, size: body.length }); return `${R2}/${key}`; };
+const fileForm = (name, content, type = "application/octet-stream") => { const f = new FormData(); f.append("file", new Blob([content], { type }), name); return f; };
+const up = await call("POST", "/admin/upload/file", { token: adminTok, form: fileForm("O'zbek tili darsligi.pdf", "%PDF-1.7 test") });
+check("yuklash: pdf → R2 files/, asl nom saqlanadi", up.status === 201 && up.data.url.startsWith(`${R2}/files/`) && up.data.name === "O'zbek tili darsligi.pdf" && uploads[0].type === "application/pdf", JSON.stringify(up.data));
+check("yuklash: oddiy foydalanuvchi → 403", (await call("POST", "/admin/upload/file", { token: userTok, form: fileForm("a.pdf", "%PDF") })).status === 403);
+check("yuklash: .html → 400", (await call("POST", "/admin/upload/file", { token: adminTok, form: fileForm("x.html", "<script>") })).status === 400);
+check("yuklash: .pdf deb atalgan html → 400", (await call("POST", "/admin/upload/file", { token: adminTok, form: fileForm("x.pdf", "<html>") })).status === 400);
+check("yuklash: faylsiz → 400", (await call("POST", "/admin/upload/file", { token: adminTok, form: new FormData() })).status === 400);
+const admin = app.get(AdminService);
+const cat = await admin.createCategory({ name: "Fan", slug: "Fan" });
+const art = await call("POST", "/admin/articles", { token: adminTok, body: { title: "Kitobli maqola", slug: "kitobli", categoryId: cat.id, type: "free", status: "published", content: "http://x/k.json", excerpt: "e", attachments: [up.data] } });
+check("maqola fayl bilan yaratiladi", art.status === 201, JSON.stringify(art.data).slice(0, 200));
+const bys = await call("GET", "/articles/byslug/kitobli");
+check("byslug: attachments qaytadi", bys.data?.attachments?.[0]?.name === "O'zbek tili darsligi.pdf");
+check("ro'yxat (/articles/all): attachments yuborilmaydi", !("attachments" in ((await call("GET", "/articles/all")).data[0] ?? {})));
+check("tahrir: begona havola → 400", (await call("PUT", `/admin/articles/${art.data.id}`, { token: adminTok, body: { attachments: [{ name: "x.pdf", url: "https://evil.com/files/x.pdf" }] } })).status === 400);
+check("tahrir: fayllarni olib tashlash", (await call("PUT", `/admin/articles/${art.data.id}`, { token: adminTok, body: { attachments: [] } })).status === 200 && (await call("GET", "/articles/byslug/kitobli")).data.attachments === null);
+
+// --- Email holati va tarqatma ---
+const mail = await call("GET", "/admin/mail", { token: adminTok });
+check("email holati: sozlanmagan deb aniq ko'rsatadi", mail.status === 200 && mail.data.configured === false && /MAIL_HOST/.test(mail.data.error));
+check("sinov xati: sozlanmagan → 400 va sababi", /sozlanmagan/.test((await call("POST", "/admin/mail/test", { token: adminTok })).data?.message ?? ""));
+await db.query(`INSERT INTO subscribers (email, "isActive", "createdAt", "updatedAt") VALUES ('s1@t.uz', true, now(), now()), ('s2@t.uz', true, now(), now())`);
+const pub = app.get(PublishingService);
+const r0 = await pub.sendNewsletter({ title: "T", slug: "t", excerpt: "e", coverImage: null });
+check("tarqatma: pochta yo'q — 0 ta ketdi, sababi yoziladi", r0.total === 2 && r0.sent === 0 && /sozlanmagan/.test(r0.error));
+const mailer = app.get(MailerService);
+const realCfg = Object.getOwnPropertyDescriptor(MailerService.prototype, "configured");
+Object.defineProperty(mailer, "configured", { get: () => true });
+let n = 0;
+mailer.sendNewArticleEmail = async (to) => { n++; if (to === "s2@t.uz") { mailer.lastError = "535 auth failed"; return false; } return true; };
+const r1 = await pub.sendNewsletter({ title: "T2", slug: "t2", excerpt: "e", coverImage: null });
+check("tarqatma: ketma-ket, natija hisoblanadi", r1.sent === 1 && r1.failed === 1 && r1.error === "535 auth failed" && n === 2);
+const mail2 = await call("GET", "/admin/mail", { token: adminTok });
+check("admin: oxirgi tarqatma natijasi ko'rinadi", mail2.data.lastNewsletter?.title === "T2" && mail2.data.lastNewsletter.sent === 1 && mail2.data.subscribers === 2);
+
+// --- Instagram → Telegram ---
+const igs = app.get(InstagramService), tg = app.get(TelegramService);
+const media = [
+  { id: "m3", media_type: "VIDEO", media_url: "https://cdn/v3.mp4", caption: "Video post", permalink: "https://instagram.com/p/3", timestamp: "2026-10-12T10:00:00+0000" },
+  { id: "m1", media_type: "IMAGE", media_url: "https://cdn/1.jpg", caption: "Birinchi post " + "x".repeat(1200), permalink: "https://instagram.com/p/1", timestamp: "2026-10-10T10:00:00+0000" },
+  { id: "m2", media_type: "CAROUSEL_ALBUM", caption: "Albom", permalink: "https://instagram.com/p/2", timestamp: "2026-10-11T10:00:00+0000", children: [{ media_type: "IMAGE", media_url: "https://cdn/2a.jpg" }, { media_type: "VIDEO", media_url: "https://cdn/2b.mp4" }] },
+];
+igs.listMedia = async () => media;
+const sentCalls = [];
+let failNext = 0;
+tg.call = async (method, body) => { if (failNext > 0) { failNext--; throw new Error("Telegram sendPhoto: Bad Request: wrong file"); } sentCalls.push({ method, body }); return { ok: true }; };
+
+const st0 = await call("GET", "/admin/ig-repost", { token: adminTok });
+check("ig-repost: standart — yoqilgan, 3 kun, 3 ta navbatda, eng eskisi birinchi", st0.data.enabled === true && st0.data.days === 3 && st0.data.pending === 3 && st0.data.next.id === "m1", JSON.stringify(st0.data).slice(0, 200));
+const T = (iso) => new Date(iso);
+check("vaqt: Toshkentda 11:00 — hali emas", (await ig.runIfDue(T("2026-11-16T06:00:00Z"))) === "not-due");
+check("vaqt: 12:00 dan keyin — yuboriladi", (await ig.runIfDue(T("2026-11-16T07:30:00Z"))) === "sent");
+const c1 = sentCalls[0];
+check("rasm: sendPhoto, kanalga, havola bilan, 1024 belgidan oshmaydi", c1.method === "sendPhoto" && c1.body.chat_id === "@kanal" && c1.body.photo === "https://cdn/1.jpg" && c1.body.caption.endsWith("https://instagram.com/p/1") && c1.body.caption.length <= 1024);
+check("vaqt: ertasiga — hali 3 kun o'tmagan", (await ig.runIfDue(T("2026-11-17T08:00:00Z"))) === "not-due");
+check("vaqt: 3 kundan keyin — keyingisi (albom)", (await ig.runIfDue(T("2026-11-19T07:30:00Z"))) === "sent" && sentCalls[1].method === "sendMediaGroup" && sentCalls[1].body.media.length === 2 && sentCalls[1].body.media[1].type === "video" && sentCalls[1].body.media[0].caption.includes("Albom"));
+const send = await call("POST", "/admin/ig-repost/send", { token: adminTok });
+check("admin 'hozir yuborish': video → sendVideo", send.data.sent === true && sentCalls[2].method === "sendVideo" && sentCalls[2].body.video === "https://cdn/v3.mp4");
+check("hammasi yuborilgach navbat bo'sh, takror yo'q", (await call("POST", "/admin/ig-repost/send", { token: adminTok })).data.sent === false && sentCalls.length === 3);
+media.push({ id: "m4", media_type: "IMAGE", media_url: "https://cdn/4.jpg", caption: "Yangi", permalink: "https://instagram.com/p/4", timestamp: "2026-11-20T10:00:00+0000" });
+failNext = 3;
+for (let i = 0; i < 3; i++) await call("POST", "/admin/ig-repost/send", { token: adminTok });
+const st1 = await call("GET", "/admin/ig-repost", { token: adminTok });
+check("3 marta yuborilmagan post tashlab o'tiladi (navbat tiqilmaydi)", st1.data.pending === 0 && st1.data.sentCount === 3);
+const up2 = await call("PUT", "/admin/ig-repost", { token: adminTok, body: { enabled: false, days: 5, hour: 9 } });
+check("sozlash: o'chirish, 5 kun, 9:00", up2.data.enabled === false && up2.data.days === 5 && up2.data.hour === 9 && (await ig.runIfDue(T("2026-12-30T07:30:00Z"))) === "not-due");
+check("sozlash: noto'g'ri qiymatlar e'tiborsiz", (await call("PUT", "/admin/ig-repost", { token: adminTok, body: { days: 0, hour: 25 } })).data.days === 5);
+check("ig-repost: oddiy foydalanuvchiga yopiq", (await call("GET", "/admin/ig-repost", { token: userTok })).status === 403);
+
+await app.close(); await server.stop(); await db.close();
+console.log(fails ? `\n${fails} ta test YIQILDI` : "\nHAMMASI O'TDI");
+process.exit(fails ? 1 : 0);

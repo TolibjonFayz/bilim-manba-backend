@@ -75,6 +75,13 @@ export class UsersService {
     return await this.userModel.findOne({ where: { email } });
   }
 
+  /** Google kabi tashqi kirishlar uchun: email katta-kichik harfga qaramay */
+  async findByEmailInsensitive(email: string) {
+    return await this.userModel.findOne({
+      where: { email: { [Op.iLike]: email.replace(/[\%_]/g, '\$&') } },
+    });
+  }
+
   //Get user by id
   async findById(id: number) {
     const user = await this.userModel.findByPk(id, {

@@ -1,5 +1,6 @@
 import { Logger } from '@nestjs/common';
 import Groq from 'groq-sdk';
+import Anthropic from '@anthropic-ai/sdk';
 
 /**
  * Qoralama yozadigan model. GEMINI_API_KEY bo'lsa — Google Gemini (o'zbek
@@ -15,6 +16,13 @@ export interface LlmConfig {
   geminiFallbacks?: string;
   groqKey?: string;
   groqModel?: string;
+  /**
+   * Claude (Anthropic) — faqat AI_WRITER=claude bo'lganda maqola yozuvchisi.
+   * Xato bersa (hisobda pul yo'q, limit, rad etish) — Gemini/Groq'ga qaytadi.
+   */
+  claudeKey?: string;
+  claudeModel?: string;
+  claudeEffort?: string;
 }
 
 export interface Llm {
@@ -77,7 +85,123 @@ export function flashModels(list: any[]): string[] {
     );
 }
 
+const claudeLogger = new Logger('Claude');
+
+/** Javobdan JSON obyektni ajratib oladi (```json ... ``` o'ramini ham) */
+export function extractJson(text: string): string {
+  const t = text.trim();
+  const fenced = /```(?:json)?\s*([\s\S]*?)```/i.exec(t);
+  const body = fenced ? fenced[1].trim() : t;
+  const a = body.indexOf('{');
+  const b = body.lastIndexOf('}');
+  return a >= 0 && b > a ? body.slice(a, b + 1) : body;
+}
+
+const CLAUDE_JSON_RULE =
+  "\n\nJavobni FAQAT bitta JSON obyekt ko'rinishida qaytar: undan oldin yoki keyin hech qanday matn, izoh yoki ``` belgisi bo'lmasin.";
+
+export function createClaudeLlm(
+  key: string,
+  model = 'claude-opus-5-5',
+  effort = 'medium',
+  client?: Pick<Anthropic, 'messages'>,
+): Llm {
+  const anthropic = client ?? new Anthropic({ apiKey: key, maxRetries: 2 });
+  const run = async (
+    system: string,
+    content: Anthropic.MessageParam['content'],
+    maxTokens: number,
+  ) => {
+    // Uzun javob — streaming (HTTP timeout bo'lmasin), oxirida to'liq xabar
+    const msg = await anthropic.messages
+      .stream({
+        model,
+        max_tokens: maxTokens,
+        system: system + CLAUDE_JSON_RULE,
+        messages: [{ role: 'user', content }],
+        output_config: { effort: effort as any },
+      } as any)
+      .finalMessage();
+    if (msg.stop_reason === 'refusal') {
+      throw new Error("Claude so'rovni rad etdi (refusal)");
+    }
+    if (msg.stop_reason === 'max_tokens') {
+      throw new Error('Claude javobi chegaraga yetib kesildi (max_tokens)');
+    }
+    const text = msg.content
+      .filter((b): b is Anthropic.TextBlock => b.type === 'text')
+      .map((b) => b.text)
+      .join('');
+    if (!text.trim()) throw new Error("Claude bo'sh javob qaytardi");
+    const u: any = msg.usage ?? {};
+    claudeLogger.log(
+      `${model}: kirish ${u.input_tokens ?? '?'} / chiqish ${u.output_tokens ?? '?'} token`,
+    );
+    return extractJson(text);
+  };
+  return {
+    name: `claude:${model}`,
+    // Katta kontekst — manbalardan ko'proq material beriladi
+    sourceBudget: 40000,
+    json: (system, user) => run(system, user, 32000),
+    vision: (system, user, images) =>
+      run(
+        system,
+        [
+          ...images.map((im) => ({
+            type: 'image' as const,
+            source: {
+              type: 'base64' as const,
+              media_type: im.mime as any,
+              data: im.data,
+            },
+          })),
+          { type: 'text' as const, text: user },
+        ],
+        4000,
+      ),
+  };
+}
+
+/** Asosiy model xato bersa — zaxira modelga (o'sha so'rov bilan) o'tadi */
+export function withFallback(primary: Llm, backup: Llm | null): Llm {
+  if (!backup) return primary;
+  const guard =
+    <A extends unknown[]>(
+      fn: (...a: A) => Promise<string>,
+      alt: ((...a: A) => Promise<string>) | undefined,
+    ) =>
+    async (...a: A) => {
+      try {
+        return await fn(...a);
+      } catch (err: any) {
+        if (!alt) throw err;
+        claudeLogger.warn(
+          `${primary.name} ishlamadi, ${backup.name} ga o'tildi: ${String(err?.message).slice(0, 200)}`,
+        );
+        return alt(...a);
+      }
+    };
+  return {
+    name: `${primary.name} (zaxira: ${backup.name})`,
+    // Zaxira modelga ham sig'adigan hajm
+    sourceBudget: Math.min(primary.sourceBudget, backup.sourceBudget),
+    json: guard(primary.json.bind(primary), backup.json.bind(backup)),
+    vision: primary.vision
+      ? guard(primary.vision.bind(primary), backup.vision?.bind(backup))
+      : backup.vision?.bind(backup),
+  };
+}
+
 export function createLlm(cfg: LlmConfig): Llm | null {
+  if (cfg.claudeKey) {
+    const claude = createClaudeLlm(
+      cfg.claudeKey,
+      cfg.claudeModel || undefined,
+      cfg.claudeEffort || undefined,
+    );
+    return withFallback(claude, createLlm({ ...cfg, claudeKey: undefined }));
+  }
   if (cfg.geminiKey) {
     const model = cfg.geminiModel || 'gemini-flash-latest';
     const models = [

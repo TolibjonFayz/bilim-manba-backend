@@ -28,6 +28,9 @@ import { ChannelQuizService } from '../publishing/channel-quiz.service';
 import { SeriesService } from '../series/series.service';
 import { SchoolService } from '../school/school.service';
 import { FileInterceptor } from '@nestjs/platform-express';
+import { PublishingService } from '../publishing/publishing.service';
+import { MailerService } from '../mailer/mailer.service';
+import { IgRepostService } from '../publishing/ig-repost.service';
 import { memoryStorage } from 'multer';
 
 @ApiTags('Admin')
@@ -45,6 +48,9 @@ export class AdminController {
     private school: SchoolService,
     private channelQuiz: ChannelQuizService,
     private analytics: AnalyticsService,
+    private publishing: PublishingService,
+    private mailer: MailerService,
+    private igRepost: IgRepostService,
   ) {}
 
   // Dashboard statistika
@@ -298,6 +304,48 @@ export class AdminController {
     return this.alerts.unlink();
   }
 
+  // Instagram postlari → Telegram kanal (har N kunda bittadan)
+  @Get('ig-repost')
+  igRepostStatus() {
+    return this.igRepost.status();
+  }
+
+  @Put('ig-repost')
+  igRepostUpdate(
+    @Body() body: { enabled?: boolean; days?: number; hour?: number },
+  ) {
+    return this.igRepost.update(body ?? {});
+  }
+
+  @Post('ig-repost/send')
+  async igRepostSend() {
+    try {
+      const r = await this.igRepost.postNext();
+      return { sent: Boolean(r), post: r };
+    } catch (err: any) {
+      throw new BadRequestException(err?.message ?? 'Yuborilmadi');
+    }
+  }
+
+  // Email: pochta ishlayaptimi, obunachilar soni, oxirgi tarqatma natijasi
+  @Get('mail')
+  mailStatus() {
+    return this.publishing.mailStatus();
+  }
+
+  // Sinov xati — adminning o'z emailiga
+  @Post('mail/test')
+  async mailTest(@Request() req: any) {
+    try {
+      await this.mailer.sendTest(req.user.email);
+      return { sent: true, to: req.user.email };
+    } catch (err: any) {
+      throw new BadRequestException(
+        `Xat yuborilmadi: ${String(err?.message ?? err).slice(0, 300)}`,
+      );
+    }
+  }
+
   // Kino: navbatdagi filmlar (har kuni bittadan) va haftalik kino maqolasi
   @Get('kino')
   kinoSettings() {
@@ -365,6 +413,18 @@ export class AdminController {
   )
   uploadImage(@UploadedFile() file: Express.Multer.File) {
     return this.adminService.uploadImage(file);
+  }
+
+  // Maqolaga fayl (kitob, hujjat) biriktirish
+  @Post('upload/file')
+  @UseInterceptors(
+    FileInterceptor('file', {
+      storage: memoryStorage(),
+      limits: { fileSize: 40 * 1024 * 1024, files: 1 },
+    }),
+  )
+  uploadFile(@UploadedFile() file: Express.Multer.File) {
+    return this.adminService.uploadFile(file);
   }
 
   // Content upload

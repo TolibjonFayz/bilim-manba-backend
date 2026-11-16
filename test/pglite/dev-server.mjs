@@ -82,5 +82,7 @@ for (const [title, slug, cat, html] of seed) {
   contents.set(slug, html);
   await admin.createArticle({ title, slug, categoryId: cats[cat].id, type: "free", status: "published", content: `http://localhost:${CONTENT_PORT}/${slug}.json`, excerpt: `${title} — qisqa tavsif.`, coverImage: null });
 }
+// Ilova fayl namunasi (maqola sahifasidagi "Yuklab olish" bloki uchun)
+await db.query(`UPDATE articles SET attachments = $1 WHERE slug = 'interstellar'`, [JSON.stringify([{ name: "Interstellar — ilmiy qo'llanma.pdf", url: `http://localhost:${CONTENT_PORT}/files/qollanma.pdf`, size: 2457600, ext: "pdf" }, { name: "Kinoteatr jadvali.xlsx", url: `http://localhost:${CONTENT_PORT}/files/jadval.xlsx`, size: 18432, ext: "xlsx" }])]);
 await app.listen(3333);
 console.log("DEV API READY http://localhost:3333/api");

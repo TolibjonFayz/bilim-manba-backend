@@ -5,20 +5,94 @@ import * as nodemailer from 'nodemailer';
 import { escHtml, safeUrl } from '../common/html';
 import { unsubscribeToken, unsubscribeUrl } from '../common/unsubscribe-token';
 
+/**
+ * Email yuborish (SMTP). Env:
+ *   MAIL_HOST, MAIL_PORT (465 — SSL, 587 — STARTTLS), MAIL_USER, MAIL_PASS,
+ *   MAIL_FROM — jo'natuvchi manzil (bo'lmasa MAIL_USER).
+ *
+ * 2026-11: Outlook/Hotmail hisoblarida Microsoft SMTP orqali kirishni
+ * o'chirib qo'ygan — xatlar ketmay qolgan edi. Tavsiya: Resend
+ * (MAIL_HOST=smtp.resend.com, MAIL_PORT=465, MAIL_USER=resend,
+ * MAIL_PASS=<API kalit>, MAIL_FROM=noreply@bilimmanba.uz) yoki Gmail
+ * (smtp.gmail.com, 465, ilova paroli).
+ */
 @Injectable()
 export class MailerService {
   private readonly logger = new Logger(MailerService.name);
-  private transporter: nodemailer.Transporter;
+  private transporter: nodemailer.Transporter | null;
 
   constructor(private config: ConfigService) {
-    this.transporter = nodemailer.createTransport({
-      host: this.config.get('MAIL_HOST'),
-      port: Number(this.config.get('MAIL_PORT')),
-      secure: false,
-      auth: {
-        user: this.config.get('MAIL_USER'),
-        pass: this.config.get('MAIL_PASS'),
-      },
+    const host = this.config.get<string>('MAIL_HOST');
+    const port = Number(this.config.get('MAIL_PORT')) || 587;
+    this.transporter = host
+      ? nodemailer.createTransport({
+          host,
+          port,
+          secure: port === 465,
+          requireTLS: port !== 465,
+          connectionTimeout: 15000,
+          greetingTimeout: 15000,
+          socketTimeout: 30000,
+          auth: {
+            user: this.config.get('MAIL_USER'),
+            pass: this.config.get('MAIL_PASS'),
+          },
+        })
+      : null;
+  }
+
+  get configured(): boolean {
+    return Boolean(this.transporter && this.config.get('MAIL_USER'));
+  }
+
+  private get from(): string {
+    const addr =
+      this.config.get<string>('MAIL_FROM') || this.config.get<string>('MAIL_USER');
+    return `"Bilim Manba" <${addr}>`;
+  }
+
+  /** Admin panel uchun: pochta serveriga ulanib, login qilib ko'radi (xat yubormaydi) */
+  async status(): Promise<{
+    configured: boolean;
+    ok: boolean;
+    host: string | null;
+    from: string | null;
+    error: string | null;
+  }> {
+    const host = this.config.get<string>('MAIL_HOST') ?? null;
+    const from =
+      this.config.get<string>('MAIL_FROM') || this.config.get<string>('MAIL_USER') || null;
+    if (!this.transporter || !this.configured) {
+      return {
+        configured: false,
+        ok: false,
+        host,
+        from,
+        error: 'Pochta sozlanmagan (MAIL_HOST / MAIL_USER / MAIL_PASS yo\'q)',
+      };
+    }
+    try {
+      await this.transporter.verify();
+      return { configured: true, ok: true, host, from, error: null };
+    } catch (err: any) {
+      return {
+        configured: true,
+        ok: false,
+        host,
+        from,
+        error: String(err?.message ?? err).slice(0, 300),
+      };
+    }
+  }
+
+  /** Sinov xati (admin panel). Xato bo'lsa — matni bilan otiladi */
+  async sendTest(to: string) {
+    if (!this.transporter) throw new Error('Pochta sozlanmagan');
+    await this.transporter.sendMail({
+      from: this.from,
+      to,
+      subject: '✅ Bilim Manba — sinov xati',
+      html: '<p>Salom! Bu sinov xati. Bilim Manba email yuborish ishlayapti.</p>',
     });
   }
 
@@ -79,9 +153,10 @@ export class MailerService {
 </body>
 </html>`;
 
+    if (!this.transporter) return false;
     try {
       await this.transporter.sendMail({
-        from: `"Bilim Manba" <${this.config.get('MAIL_USER')}>`,
+        from: this.from,
         to,
         subject: `📚 Yangi maqola: ${String(articleTitle).replace(/[\r\n]+/g, ' ')}`,
         html,
@@ -90,10 +165,16 @@ export class MailerService {
           'List-Unsubscribe-Post': 'List-Unsubscribe=One-Click',
         },
       });
+      return true;
     } catch (error) {
       this.logger.error(`Email yuborishda xato ${to}: ${error?.message}`);
+      this.lastError = String(error?.message ?? error).slice(0, 300);
+      return false;
     }
   }
+
+  /** Oxirgi yuborishdagi xato matni (statistika uchun) */
+  lastError: string | null = null;
 
   async sendResetPasswordEmail(to: string, name: string, resetUrl: string) {
     const html = `
@@ -132,9 +213,13 @@ export class MailerService {
 </body>
 </html>`;
 
+    if (!this.transporter) {
+      this.logger.error('Pochta sozlanmagan — parol tiklash xati yuborilmadi');
+      return;
+    }
     try {
       await this.transporter.sendMail({
-        from: `"Bilim Manba" <${this.config.get('MAIL_USER')}>`,
+        from: this.from,
         to,
         subject: '🔐 Parolni tiklash — Bilim Manba',
         html,

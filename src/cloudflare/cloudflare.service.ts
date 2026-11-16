@@ -23,6 +23,30 @@ export class CloudflareService {
     this.publicUrl = this.config.get<string>('CF_R2_PUBLIC_URL') as string;
   }
 
+  get filesBaseUrl() {
+    return this.publicUrl;
+  }
+
+  /** Biriktirilgan fayl (kitob, hujjat): doim yuklab olinadi, sahifa sifatida ochilmaydi */
+  async uploadFile(
+    body: Buffer,
+    key: string,
+    contentType: string,
+    downloadName: string,
+  ): Promise<string> {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: contentType,
+        ContentDisposition: `attachment; filename*=UTF-8''${encodeURIComponent(downloadName)}`,
+        CacheControl: 'public, max-age=31536000, immutable',
+      }),
+    );
+    return `${this.publicUrl}/${key}`;
+  }
+
   async uploadJson(content: object, filename: string): Promise<string> {
     const key = `articles/${filename}`;
     await this.s3.send(

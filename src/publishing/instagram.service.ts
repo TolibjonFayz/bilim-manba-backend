@@ -12,6 +12,20 @@ const HASHTAG_LIMIT = 30;
 // Uzoq muddatli token 60 kun yashaydi — haftada bir yangilaymiz
 const REFRESH_EVERY_MS = 7 * 24 * 60 * 60 * 1000;
 
+export interface InstagramMedia {
+  id: string;
+  caption?: string;
+  media_type: 'IMAGE' | 'VIDEO' | 'CAROUSEL_ALBUM' | string;
+  media_url?: string;
+  permalink?: string;
+  timestamp: string;
+  children?: { id?: string; media_type: string; media_url?: string }[];
+}
+
+// Ro'yxat 10 daqiqa xotirada (admin panel + soatlik tekshiruv bir xil narsani so'raydi)
+const MEDIA_CACHE_MS = 10 * 60 * 1000;
+const MEDIA_MAX = 300;
+
 export interface InstagramArticle {
   title: string;
   excerpt?: string | null;
@@ -219,6 +233,35 @@ export class InstagramService {
       }
     }
     return this.userId;
+  }
+
+  private mediaCache?: { at: number; list: InstagramMedia[] };
+
+  /** Akkauntdagi postlar (eng yangisi birinchi), ko'pi bilan MEDIA_MAX ta */
+  async listMedia(force = false): Promise<InstagramMedia[]> {
+    const c = this.mediaCache;
+    if (!force && c && Date.now() - c.at < MEDIA_CACHE_MS) return c.list;
+    const id = await this.igUserId();
+    const list: InstagramMedia[] = [];
+    let after: string | undefined;
+    do {
+      const page = await this.api('GET', `${id}/media`, {
+        fields:
+          'id,caption,media_type,media_url,permalink,timestamp,children{media_type,media_url}',
+        limit: '50',
+        ...(after ? { after } : {}),
+      });
+      for (const m of page.data ?? []) {
+        list.push({
+          ...m,
+          id: String(m.id),
+          children: m.children?.data ?? undefined,
+        });
+      }
+      after = page.paging?.next ? page.paging?.cursors?.after : undefined;
+    } while (after && list.length < MEDIA_MAX);
+    this.mediaCache = { at: Date.now(), list };
+    return list;
   }
 
   buildCaption(a: InstagramArticle): string {
