@@ -1,3 +1,4 @@
+import { parseLlmJson } from './json-repair';
 import { Injectable, Logger, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { InjectConnection } from '@nestjs/sequelize';
@@ -148,9 +149,7 @@ export class FactCheckService {
         SYSTEM,
         `MANBALAR:\n\n${src}\n\n=====\n\nMAQOLA:\n\n${text}`,
       );
-      const json = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const json = parseLlmJson(raw);
       const issues = normalizeIssues(json, text);
       await this.save(articleId, 'done', issues, src, null);
       this.logger.log(

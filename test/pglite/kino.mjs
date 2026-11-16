@@ -151,6 +151,15 @@ check("hozir yozish: ikkinchi bosish rad etiladi", threw);
 await new Promise((r) => setTimeout(r, 1500));
 check("hozir yozish: o'sha kuni ham yozadi (force)", calls.length === startedBefore + 1 && calls.at(-1).topic === "Inside Out 2");
 
+// 2026-11-16: yozilmay qolgan film — darhol chop etish (kutilmagan 18:00 emas)
+const published = []; drafts.publishing.publishWithResults = async (id) => { published.push(id); await db.query(`UPDATE articles SET status='published' WHERE id=$1`, [id]); return { telegram: true, instagram: true }; };
+const beforeNow = calls.length;
+const rNow = await drafts.runKinoIfDue(T("2026-11-16", 9), true, true);
+const nowArt = (await db.query(`SELECT * FROM articles ORDER BY id DESC LIMIT 1`)).rows[0];
+check("darhol: navbatdagi film yozilib, kutmasdan chop etiladi", rNow === "done" && calls.length === beforeNow + 1 && calls.at(-1).topic === "Paddington 2" && published.includes(nowArt.id) && nowArt.status === "published" && !nowArt.scheduledAt, JSON.stringify({ rNow, topic: calls.at(-1)?.topic, published }));
+check("darhol: navbatdan olib tashlanadi va admin'ga 'chop etildi' xabari", !(await drafts.getKinoSettings()).queue.includes("Paddington 2") && /chop etildi/.test(alerts.at(-1)));
+check("bir martalik ish: ikkinchi marta ishlamaydi", await (async () => { const c = calls.length; await drafts.kinoRetryNowOnce(); await drafts.kinoRetryNowOnce(); return calls.length === c + 1; })());
+
 await app.close();
 await server.stop();
 console.log(fails ? `\n${fails} ta tekshiruv yiqildi` : "\nHammasi o'tdi");

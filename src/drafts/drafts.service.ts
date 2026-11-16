@@ -1,3 +1,4 @@
+import { parseLlmJson } from './json-repair';
 import {
   BadRequestException,
   Injectable,
@@ -370,6 +371,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     setTimeout(() => void this.schoolKickoffOnce(), 6 * 60 * 1000).unref();
     // 2026-11-12: "Detektiv qo'ylar" matni xom markdown edi — bezatilgan HTML
     setTimeout(() => void this.fixDetektivOnce(), 2 * 60 * 1000).unref();
+    // 2026-11-16: yozilmay qolgan Spider-Man maqolasi — darhol (boshqa
+    // bir martalik ishlardan keyin, Gemini limitiga urilmasin)
+    setTimeout(() => void this.kinoRetryNowOnce(), 8 * 60 * 1000).unref();
     // 2026-11-12: 5 ta film kino navbatiga (birinchi kunlik tekshiruvdan oldin)
     // (jadvallar yaratilgandan keyin, birinchi kunlik tekshiruvdan — 60 s — oldin)
     setTimeout(
@@ -541,9 +545,12 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
   async runKinoIfDue(
     now = new Date(),
     force = false,
+    /** Kutmasdan darhol chop etish (18:00 ni kutmasdan) */
+    publishNow = false,
   ): Promise<'done' | 'skipped' | 'failed'> {
     if (this.kinoRunning) return 'skipped';
     if (!this.getLlm()) return 'skipped';
+    const startedAt = Date.now();
     const local = new Date(now.getTime() + TASHKENT_OFFSET_MS);
     if (!force && local.getUTCHours() < DAILY_HOUR) return 'skipped';
     const today = tashkentDay(now);
@@ -570,7 +577,26 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
             ? { topic, categoryId: kino.id, skipCheck: true }
             : { categoryId: kino.id },
         );
-        const at = DraftsService.kinoPublishAt(new Date());
+        if (publishNow) {
+          if (topic) await this.removeKinoTopic(topic);
+          await this.setSetting('kino_last_error', '');
+          const res = await this.publishing.publishWithResults(article.id);
+          this.logger.log(`Kino maqolasi darhol chop etildi: ${article.slug}`);
+          await this.alerts.send(
+            `🎬 <b>Kino maqolasi chop etildi</b>
+
+${escapeHtml(article.title)}
+
+Telegram: ${res?.telegram ? '✅' : '—'} · Instagram: ${res?.instagram ? '✅' : '—'}`,
+            { text: '📖 Maqola', path: `/articles/${article.slug}` },
+          );
+          return 'done';
+        }
+        // Yozish 5–15 daqiqa oladi — vaqt "now" dan shuncha keyin hisoblanadi
+        // (avval real soat olinardi: test bergan vaqtga e'tibor qilinmasdi)
+        const at = DraftsService.kinoPublishAt(
+          new Date(now.getTime() + (Date.now() - startedAt)),
+        );
         await article.update({ scheduledAt: at } as any);
         await this.publishing.refreshSchedule();
         if (topic) await this.removeKinoTopic(topic);
@@ -603,6 +629,23 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
       }
     } finally {
       this.kinoRunning = false;
+    }
+  }
+
+  /**
+   * Bir marta (2026-11-16): 16-noyabr 06:17 da Spider-Man kino maqolasi
+   * buzuq JSON tufayli yozilmay qoldi — deploy'dan keyin navbatdagi filmni
+   * yozib, darhol chop etadi (admin so'rovi bilan).
+   */
+  async kinoRetryNowOnce() {
+    const key = 'once_kino_retry_spiderman_v1';
+    try {
+      if (await this.getSetting(key)) return;
+      await this.setSetting(key, new Date().toISOString());
+      const r = await this.runKinoIfDue(new Date(), true, true);
+      this.logger.log(`Kino qayta urinish: ${r}`);
+    } catch (err: any) {
+      this.logger.error(`Kino qayta urinishda xato: ${err?.message}`);
     }
   }
 
@@ -895,9 +938,7 @@ Oddiy ilmiy, tarixiy, sport, san'at, texnologiya va oilaviy kino mavzulari — m
 Javob faqat JSON: {"ok": true yoki false, "reason": "qisqa izoh"}`,
         `"${main.title}"\n${main.text.slice(0, 3000)}`,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       return {
         ok: j?.ok !== false,
         reason: String(j?.reason ?? '').slice(0, 200),
@@ -976,9 +1017,7 @@ ${existing.map((a) => `- ${a.title}`).join('\n') || "- (hali yo'q)"}
 Javob faqat JSON: {"titles": ["..."]}`,
         name,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       titles = (Array.isArray(j?.titles) ? j.titles : [])
         .map((t: unknown) => String(t ?? '').trim())
         .filter(Boolean)
@@ -1066,9 +1105,7 @@ Javob faqat JSON: {"picks": [{"query": "so'rov aynan", "title": "English Wikiped
           )
           .join('\n'),
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       picks = (Array.isArray(j?.picks) ? j.picks : [])
         .map((p: any) => ({
           query: String(p?.query ?? '').trim(),
@@ -1150,9 +1187,7 @@ Javob faqat JSON: {"picks": [{"query": "so'rov aynan", "title": "English Wikiped
 Javob faqat JSON: {"numbers": [n, ...]}`,
         `Yangi maqola: ${title}\n${excerpt}\n\nMavjud maqolalar:\n${pool.map((a, i) => `${i}) ${a.title}`).join('\n')}`,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       const picked = [
         ...new Set<number>(
           (Array.isArray(j?.numbers) ? j.numbers : []).map(Number),
@@ -1206,9 +1241,7 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
           `Foydalanuvchi maqola mavzusini yozdi (o'zbekcha yoki boshqa tilda, sarlavha ko'rinishida bo'lishi mumkin). Shu mavzu bo'yicha ma'lumot beradigan eng mos INGLIZCHA Wikipedia maqolalarining aniq nomlarini top (1–3 ta, eng mosi birinchi). Javob faqat JSON: {"titles": ["..."]}`,
           topic,
         );
-        const j = JSON.parse(
-          raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-        );
+        const j = parseLlmJson(raw);
         titles = (Array.isArray(j?.titles) ? j.titles : [])
           .map((t: unknown) => String(t ?? '').trim())
           .filter(Boolean)
@@ -1442,9 +1475,7 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
         `Maqola uchun muqova rasmi qidiramiz. Sarlavha va tavsifga qarab 2–3 ta INGLIZCHA qidiruv so'zi ber — aniq, ko'rinadigan obyekt, mavhum so'zlar emas. Javob faqat JSON: {"imageQueries": ["..."]}`,
         `Sarlavha: ${article.title}\nTavsif: ${article.excerpt ?? ''}\nTeglar: ${article.tags ?? ''}`,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       imageQueries = (Array.isArray(j?.imageQueries) ? j.imageQueries : [])
         .map((q: unknown) => String(q ?? '').trim())
         .filter(Boolean)
@@ -1637,9 +1668,7 @@ Javob faqat JSON: {"numbers": [n, ...]}`,
         `Maqola uchun muqova rasmi qidiryapmiz, lekin aniq mavzuga oid rasm topilmadi. KENGROQ, mavzuga yaqin va fotoda ko'rinadigan 3 ta INGLIZCHA qidiruv so'zi ber: davr, joy, muhit, kayfiyat yoki tegishli obyektlar (masalan, qadimgi Misr fir'avni → "egyptian pyramids desert", "hieroglyphs carved stone"; futbolchi → "football stadium night"). Odamlarning tanasiga urg'u beradigan so'zlar bo'lmasin. Javob faqat JSON: {"queries": ["..."]}`,
         `Sarlavha: ${title}\nTavsif: ${excerpt ?? ''}\nKategoriya: ${categoryName ?? ''}`,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       return (Array.isArray(j?.queries) ? j.queries : [])
         .map((q: unknown) => String(q ?? '').trim())
         .filter(Boolean)
@@ -1679,9 +1708,7 @@ Javob faqat JSON: {"safe": true yoki false, "reason": "qisqa izoh"}`,
         `Rasm: ${c.title} — ${c.provider}`,
         [{ mime: 'image/jpeg', data: small.toString('base64') }],
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       if (j?.safe !== true) {
         this.logger.warn(
           `Xavfli deb topildi: ${c.title} (${String(j?.reason ?? '').slice(0, 120)})`,
@@ -1810,9 +1837,7 @@ Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izo
           .join('; ')}`,
         ok.map((t) => ({ mime: 'image/jpeg', data: t.data })),
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       const unsafe = new Set<number>(
         (Array.isArray(j?.unsafe) ? j.unsafe : []).map(Number),
       );
@@ -1883,13 +1908,29 @@ Javob faqat JSON: {"unsafe": [n, ...], "ranking": [n, ...], "reason": "qisqa izo
     user: string,
     stage: string,
   ): Promise<DraftJson> {
-    try {
-      const raw = await llm.json(system, user);
-      const json = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+    const once = async (u: string) => {
+      const json = parseLlmJson(await llm.json(system, u));
       if (!json?.html) throw new Error("JSON'da html yo'q");
       return json as DraftJson;
+    };
+    try {
+      try {
+        return await once(user);
+      } catch (err: any) {
+        // Buzuq JSON (masalan, ekranlanmagan qo'shtirnoq) — bir marta qayta
+        // so'raymiz. Tarmoq/limit xatolari esa darhol yuqoriga
+        if (!(err instanceof SyntaxError) && !/html yo'q/.test(err?.message)) {
+          throw err;
+        }
+        this.logger.warn(
+          `AI ${stage}: javob JSON emas (${err.message}) — qayta so'raladi`,
+        );
+        return await once(
+          `${user}
+
+MUHIM: oldingi javobing yaroqli JSON emas edi. Faqat to'g'ri JSON qaytar: matn ichidagi qo'shtirnoqlarni \\" deb yoz yoki «» ishlat.`,
+        );
+      }
     } catch (err: any) {
       this.logger.error(`AI ${stage} xatosi (${llm.name}): ${err?.message}`);
       throw new ServiceUnavailableException(

@@ -1,3 +1,4 @@
+import { parseLlmJson } from '../drafts/json-repair';
 import {
   BadRequestException,
   Injectable,
@@ -242,9 +243,7 @@ Avval ishlatilgan mavzular: ${used.slice(-150).join('; ') || "yo'q"}
 Javob faqat JSON: {"topics": [{"title": "...", "topic": "...", "subject": "...", "grade": 7}]}`,
         'Maktab mavzulari',
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       const seen = new Set(used);
       list = (Array.isArray(j?.topics) ? j.topics : [])
         .map((t: any) => ({
@@ -306,9 +305,7 @@ Javob faqat JSON: {"picks": [{"n": 0, "subject": "...", "grade": 8}]}`,
           )
           .join('\n'),
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       picks = (Array.isArray(j?.picks) ? j.picks : []).map((p: any) => ({
         n: Number(p?.n),
         subject: clean(p?.subject, 60),

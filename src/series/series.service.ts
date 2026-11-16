@@ -1,3 +1,4 @@
+import { parseLlmJson } from '../drafts/json-repair';
 import {
   BadRequestException,
   Injectable,
@@ -319,9 +320,7 @@ Mavzular musulmon oila o'quvchisiga mos bo'lsin: 18+, spirtli ichimlik, qimor, o
 ${existing.length ? `Seriyada allaqachon bor qismlar (takrorlama, davomini rejalashtir):\n${existing.map((t) => `- ${t}`).join('\n')}\n` : ''}Javob faqat JSON: {"parts": [{"title": "...", "topic": "..."}]}`,
         series.title,
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       parts = (Array.isArray(j?.parts) ? j.parts : [])
         .map((p: any) => ({
           title: clean(p?.title, 80),
@@ -467,9 +466,7 @@ ${recent.map((a) => `- ${a.title}`).join('\n')}
 Javob faqat JSON: {"title": "seriya nomi (50 belgigacha)", "description": "bir gaplik qiziqarli tavsif (160 belgigacha)"}`,
         'Yangi seriya',
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       idea = {
         title: clean(j?.title, 80),
         description: clean(j?.description, 300),
@@ -538,9 +535,7 @@ Javob faqat JSON: {"groups": [{"title": "...", "description": "...", "numbers": 
           )
           .join('\n'),
       );
-      const j = JSON.parse(
-        raw.slice(raw.indexOf('{'), raw.lastIndexOf('}') + 1),
-      );
+      const j = parseLlmJson(raw);
       groups = (Array.isArray(j?.groups) ? j.groups : []).map((g: any) => ({
         title: clean(g?.title, 80),
         description: clean(g?.description, 300),

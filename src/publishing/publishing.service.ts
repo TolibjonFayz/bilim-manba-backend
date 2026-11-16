@@ -134,7 +134,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     return this.articleModel.findByPk(id);
   }
 
-  private async publishWithResults(id: number) {
+  async publishWithResults(id: number) {
     const article = await this.articleModel.findByPk(id);
     if (!article) throw new NotFoundException('Maqola topilmadi');
     if (article.status === ArticleStatus.PUBLISHED)
