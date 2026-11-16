@@ -371,9 +371,9 @@ export class DraftsService implements OnModuleInit, OnModuleDestroy {
     setTimeout(() => void this.schoolKickoffOnce(), 6 * 60 * 1000).unref();
     // 2026-11-12: "Detektiv qo'ylar" matni xom markdown edi — bezatilgan HTML
     setTimeout(() => void this.fixDetektivOnce(), 2 * 60 * 1000).unref();
-    // 2026-11-16: yozilmay qolgan Spider-Man maqolasi — darhol (boshqa
-    // bir martalik ishlardan keyin, Gemini limitiga urilmasin)
-    setTimeout(() => void this.kinoRetryNowOnce(), 8 * 60 * 1000).unref();
+    // (2026-11-16: kinoRetryNowOnce olib tashlandi — Spider-Man maqolasi
+    // 15-noyabr 18:00 da allaqachon chiqqan ekan; navbatdagi boshqa filmni
+    // darhol chop etib yubormasin)
     // 2026-11-12: 5 ta film kino navbatiga (birinchi kunlik tekshiruvdan oldin)
     // (jadvallar yaratilgandan keyin, birinchi kunlik tekshiruvdan — 60 s — oldin)
     setTimeout(
