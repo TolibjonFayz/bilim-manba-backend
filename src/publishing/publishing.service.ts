@@ -226,6 +226,7 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     const result = {
       at: new Date().toISOString(),
       title: article.title,
+      slug: article.slug,
       total,
       sent,
       failed,
@@ -247,6 +248,17 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
       )
       .catch(() => {});
     return result;
+  }
+
+  /** Admin: eng so'nggi chop etilgan maqola xatini obunachilarga qayta yuborish */
+  async resendLatestNewsletter() {
+    const article = await this.articleModel.findOne({
+      where: { status: ArticleStatus.PUBLISHED },
+      order: [['createdAt', 'DESC']],
+    });
+    if (!article) throw new Error("Chop etilgan maqola yo'q");
+    if (!this.mailer.configured) throw new Error('Pochta sozlanmagan');
+    return this.sendNewsletter(article);
   }
 
   /** Admin panel: pochta holati va oxirgi tarqatma natijasi */

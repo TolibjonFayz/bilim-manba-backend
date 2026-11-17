@@ -11,9 +11,11 @@ import { unsubscribeToken, unsubscribeUrl } from '../common/unsubscribe-token';
  *   MAIL_FROM — jo'natuvchi manzil (bo'lmasa MAIL_USER).
  *
  * 2026-11: Outlook/Hotmail hisoblarida Microsoft SMTP orqali kirishni
- * o'chirib qo'ygan — xatlar ketmay qolgan edi. Tavsiya: Resend
- * (MAIL_HOST=smtp.resend.com, MAIL_PORT=465, MAIL_USER=resend,
- * MAIL_PASS=<API kalit>, MAIL_FROM=noreply@bilimmanba.uz) yoki Gmail
+ * o'chirib qo'ygan — xatlar ketmay qolgan edi. Hozir: Resend
+ * (MAIL_HOST=smtp.resend.com, MAIL_PASS=<API kalit>, MAIL_FROM=
+ * noreply@bilimmanba.uz) — HTTP API orqali yuboriladi, chunki Render bepul
+ * tarifi SMTP portlarini yopadi (Gmail SMTP ham shu sabab ishlamaydi).
+ * Boshqa SMTP — faqat pullik serverda; masalan Gmail
  * (smtp.gmail.com, 465, ilova paroli).
  */
 @Injectable()
@@ -41,8 +43,61 @@ export class MailerService {
       : null;
   }
 
+  /**
+   * Resend HTTP API (https://api.resend.com/emails). Render'ning bepul
+   * tarifi SMTP portlarini (25/465/587) yopadi — smtp.resend.com ga ulanish
+   * "Connection timeout" bo'lardi. Shuning uchun Resend bo'lsa SMTP emas,
+   * oddiy HTTPS ishlatiladi. Kalit: RESEND_API_KEY yoki (MAIL_HOST resend
+   * bo'lsa) MAIL_PASS.
+   */
+  private get resendKey(): string | null {
+    const direct = (this.config.get<string>('RESEND_API_KEY') ?? '').trim();
+    if (direct) return direct;
+    const host = (this.config.get<string>('MAIL_HOST') ?? '').toLowerCase();
+    const pass = (this.config.get<string>('MAIL_PASS') ?? '').trim();
+    return host.includes('resend') && pass ? pass : null;
+  }
+
   get configured(): boolean {
+    if (this.resendKey) return true;
     return Boolean(this.transporter && this.config.get('MAIL_USER'));
+  }
+
+  /** Bitta xatni yuboradi (Resend API yoki SMTP). Xato bo'lsa — otiladi */
+  private async deliver(mail: {
+    from: string;
+    to: string;
+    subject: string;
+    html: string;
+    headers?: Record<string, string>;
+  }) {
+    const key = this.resendKey;
+    if (key) {
+      const res = await fetch('https://api.resend.com/emails', {
+        method: 'POST',
+        headers: {
+          Authorization: `Bearer ${key}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          from: mail.from,
+          to: [mail.to],
+          subject: mail.subject,
+          html: mail.html,
+          ...(mail.headers ? { headers: mail.headers } : {}),
+        }),
+        signal: AbortSignal.timeout(20000),
+      });
+      if (!res.ok) {
+        const j: any = await res.json().catch(() => ({}));
+        throw new Error(
+          `Resend ${res.status}: ${j?.message ?? j?.name ?? 'xato'}`,
+        );
+      }
+      return;
+    }
+    if (!this.transporter) throw new Error('Pochta sozlanmagan');
+    await this.transporter.sendMail(mail);
   }
 
   private get from(): string {
@@ -62,6 +117,35 @@ export class MailerService {
     const host = this.config.get<string>('MAIL_HOST') ?? null;
     const from =
       this.config.get<string>('MAIL_FROM') || this.config.get<string>('MAIL_USER') || null;
+    const key = this.resendKey;
+    if (key) {
+      // Kalitni tekshirish (xat yubormasdan). Faqat "yuborish" huquqli kalit
+      // domenlar ro'yxatini ko'ra olmaydi — "restricted_api_key" ham kalit
+      // to'g'ri ekanini bildiradi
+      try {
+        const res = await fetch('https://api.resend.com/domains', {
+          headers: { Authorization: `Bearer ${key}` },
+          signal: AbortSignal.timeout(15000),
+        });
+        const j: any = await res.json().catch(() => ({}));
+        const ok = res.ok || j?.name === 'restricted_api_key';
+        return {
+          configured: true,
+          ok,
+          host: 'Resend API',
+          from,
+          error: ok ? null : `Resend: ${j?.message ?? res.status}`,
+        };
+      } catch (err: any) {
+        return {
+          configured: true,
+          ok: false,
+          host: 'Resend API',
+          from,
+          error: `Resend'ga ulanib bo'lmadi: ${String(err?.message ?? err).slice(0, 200)}`,
+        };
+      }
+    }
     if (!this.transporter || !this.configured) {
       return {
         configured: false,
@@ -87,8 +171,8 @@ export class MailerService {
 
   /** Sinov xati (admin panel). Xato bo'lsa — matni bilan otiladi */
   async sendTest(to: string) {
-    if (!this.transporter) throw new Error('Pochta sozlanmagan');
-    await this.transporter.sendMail({
+    if (!this.configured) throw new Error('Pochta sozlanmagan');
+    await this.deliver({
       from: this.from,
       to,
       subject: '✅ Bilim Manba — sinov xati',
@@ -153,9 +237,9 @@ export class MailerService {
 </body>
 </html>`;
 
-    if (!this.transporter) return false;
+    if (!this.configured) return false;
     try {
-      await this.transporter.sendMail({
+      await this.deliver({
         from: this.from,
         to,
         subject: `📚 Yangi maqola: ${String(articleTitle).replace(/[\r\n]+/g, ' ')}`,
@@ -213,12 +297,12 @@ export class MailerService {
 </body>
 </html>`;
 
-    if (!this.transporter) {
+    if (!this.configured) {
       this.logger.error('Pochta sozlanmagan — parol tiklash xati yuborilmadi');
       return;
     }
     try {
-      await this.transporter.sendMail({
+      await this.deliver({
         from: this.from,
         to,
         subject: '🔐 Parolni tiklash — Bilim Manba',

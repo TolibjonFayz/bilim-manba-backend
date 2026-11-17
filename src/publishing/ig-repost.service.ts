@@ -178,7 +178,9 @@ export class IgRepostService implements OnModuleInit, OnModuleDestroy {
   }
 
   /** Navbatdagi postni yuboradi (admin "hozir yuborish" ham shu) */
-  async postNext(): Promise<{ id: string; caption: string } | null> {
+  async postNext(
+    now = new Date(),
+  ): Promise<{ id: string; caption: string } | null> {
     if (!this.telegram.configured) {
       throw new Error('Telegram kanal sozlanmagan');
     }
@@ -198,11 +200,11 @@ export class IgRepostService implements OnModuleInit, OnModuleDestroy {
     const sent = await this.json<string[]>(K.sent, []);
     sent.push(next.id);
     await this.set(K.sent, JSON.stringify(sent.slice(-5000)));
-    await this.set(K.last, new Date().toISOString());
+    await this.set(K.last, now.toISOString());
     await this.set(
       K.lastPost,
       JSON.stringify({
-        at: new Date().toISOString(),
+        at: now.toISOString(),
         id: next.id,
         type: next.media_type,
         caption: cut(String(next.caption ?? ''), 120),
@@ -234,7 +236,7 @@ export class IgRepostService implements OnModuleInit, OnModuleDestroy {
     if (!(await this.isDue(now))) return 'not-due';
     this.running = true;
     try {
-      const r = await this.postNext();
+      const r = await this.postNext(now);
       // Navbat bo'sh bo'lsa ham "oxirgi tekshiruv" yoziladi — har soat
       // Instagram'ga bekorga so'rov ketmasin (yangi post keyingi davrda chiqadi)
       if (!r) await this.set(K.last, now.toISOString());

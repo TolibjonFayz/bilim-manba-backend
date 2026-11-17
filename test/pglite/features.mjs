@@ -213,6 +213,49 @@ check("sozlash: o'chirish, 5 kun, 9:00", up2.data.enabled === false && up2.data.
 check("sozlash: noto'g'ri qiymatlar e'tiborsiz", (await call("PUT", "/admin/ig-repost", { token: adminTok, body: { days: 0, hour: 25 } })).data.days === 5);
 check("ig-repost: oddiy foydalanuvchiga yopiq", (await call("GET", "/admin/ig-repost", { token: userTok })).status === 403);
 
+// --- Resend HTTP API (Render SMTP portlarini yopadi) ---
+const resendCalls = [];
+let resendReply = { status: 200, body: { id: "e1" } };
+globalThis.fetch = async (url, opts) => {
+  const u = String(url);
+  if (u.startsWith("https://api.resend.com/")) {
+    resendCalls.push({ u, method: opts?.method ?? "GET", auth: opts?.headers?.Authorization, body: opts?.body ? JSON.parse(opts.body) : null });
+    return new Response(JSON.stringify(resendReply.body), { status: resendReply.status });
+  }
+  return realFetch(url, opts);
+};
+const mk = (cfg) => new MailerService({ get: (k) => cfg[k] });
+const rm = mk({ MAIL_HOST: "smtp.resend.com", MAIL_PORT: "465", MAIL_USER: "resend", MAIL_PASS: "re_test123", MAIL_FROM: "noreply@bilimmanba.uz" });
+check("resend: sozlangan deb hisoblanadi", rm.configured === true);
+const okSend = await rm.sendNewArticleEmail("o@t.uz", "Sarlavha <b>", "slug-1", "Tavsif", "https://res.cloudinary.com/x.jpg");
+const rc = resendCalls.at(-1);
+check("resend: SMTP emas, HTTPS API orqali yuboradi", okSend === true && rc.u === "https://api.resend.com/emails" && rc.method === "POST" && rc.auth === "Bearer re_test123");
+check("resend: jo'natuvchi, oluvchi, mavzu, html, unsubscribe sarlavhasi", rc.body.from === '"Bilim Manba" <noreply@bilimmanba.uz>' && rc.body.to[0] === "o@t.uz" && rc.body.subject.includes("Sarlavha") && rc.body.html.includes("Sarlavha &lt;b&gt;") && /unsubscribe/.test(rc.body.headers["List-Unsubscribe"]));
+resendReply = { status: 403, body: { name: "validation_error", message: "The bilimmanba.uz domain is not verified" } };
+const bad = await rm.sendNewArticleEmail("o@t.uz", "S", "s", "", "");
+check("resend: xato bo'lsa false va sababi saqlanadi", bad === false && /not verified/.test(rm.lastError));
+resendReply = { status: 401, body: { name: "restricted_api_key", message: "This API key is restricted to only send emails" } };
+const rs = await rm.status();
+check("resend holati: faqat-yuborish kaliti — ishlayapti", rs.ok === true && rs.host === "Resend API" && resendCalls.at(-1).u.endsWith("/domains"));
+resendReply = { status: 400, body: { name: "validation_error", message: "API key is invalid" } };
+const rs2 = await rm.status();
+check("resend holati: noto'g'ri kalit — xato matni bilan", rs2.ok === false && /invalid/.test(rs2.error));
+resendReply = { status: 200, body: { id: "e2" } };
+await rm.sendTest("admin@test.uz");
+check("sinov xati ham API orqali", resendCalls.at(-1).body.to[0] === "admin@test.uz");
+await rm.sendResetPasswordEmail("v@t.uz", "Vali", "https://bilimmanba.uz/reset-password?token=abc");
+check("parol tiklash xati ham API orqali", resendCalls.at(-1).body.to[0] === "v@t.uz" && resendCalls.at(-1).body.html.includes("reset-password"));
+check("RESEND_API_KEY alohida ham ishlaydi", mk({ RESEND_API_KEY: "re_x", MAIL_FROM: "a@b.uz" }).configured === true);
+check("oddiy SMTP (resend emas) — transporter bilan", mk({ MAIL_HOST: "smtp.gmail.com", MAIL_PORT: "465", MAIL_USER: "u", MAIL_PASS: "p" }).configured === true && mk({}).configured === false);
+
+// Oxirgi maqolani qayta yuborish (admin)
+Object.defineProperty(MailerService.prototype, "configured", { configurable: true, get() { return true; } });
+const sentTo = [];
+mailer.sendNewArticleEmail = async (to) => { sentTo.push(to); return true; };
+const rl = await call("POST", "/admin/mail/resend-latest", { token: adminTok });
+check("qayta yuborish: so'nggi maqola, hamma obunachiga", rl.status === 201 && rl.data.title === "Kitobli maqola" && rl.data.sent === 2 && rl.data.slug === "kitobli" && sentTo.length >= 2, JSON.stringify(rl.data));
+check("qayta yuborish: oddiy foydalanuvchiga yopiq", (await call("POST", "/admin/mail/resend-latest", { token: userTok })).status === 403);
+
 await app.close(); await server.stop(); await db.close();
 console.log(fails ? `\n${fails} ta test YIQILDI` : "\nHAMMASI O'TDI");
 process.exit(fails ? 1 : 0);

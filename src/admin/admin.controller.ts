@@ -346,6 +346,16 @@ export class AdminController {
     }
   }
 
+  // Eng so'nggi maqola xatini obunachilarga qayta yuborish (avval ketmagan bo'lsa)
+  @Post('mail/resend-latest')
+  async mailResendLatest() {
+    try {
+      return await this.publishing.resendLatestNewsletter();
+    } catch (err: any) {
+      throw new BadRequestException(err?.message ?? 'Yuborilmadi');
+    }
+  }
+
   // Kino: navbatdagi filmlar (har kuni bittadan) va haftalik kino maqolasi
   @Get('kino')
   kinoSettings() {
