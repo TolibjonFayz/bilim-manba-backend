@@ -40,6 +40,14 @@ const MAX_WAIT_MS = 6 * 60 * 60 * 1000;
  * daqiqada so'ramaymiz: eng yaqin scheduledAt vaqtini bilib, aynan o'sha
  * paytga timer qo'yamiz (ko'pi bilan 6 soatda bir tekshiruv).
  */
+/** Pochta yetkaza oladigan manzilmi: bitta "@", nuqtali domen, bo'sh joysiz */
+export function isMailable(email: string): boolean {
+  return (
+    email.length <= 254 &&
+    /^[^\s@<>()",;:]+@[^\s@<>()",;:]+\.[^\s@<>()",;:.]{2,}$/.test(email)
+  );
+}
+
 @Injectable()
 export class PublishingService implements OnModuleInit, OnModuleDestroy {
   private readonly logger = new Logger(PublishingService.name);
@@ -201,14 +209,22 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
     let sent = 0;
     let failed = 0;
     let total = 0;
+    // Formada tekshiruv bo'lmagan paytda yozilgan buzuq manzillar (masalan
+    // "@" siz) — pochta xizmati baribir rad etadi; xato deb sanalmaydi
+    const invalid: string[] = [];
     this.mailer.lastError = null;
     try {
       const subs = await this.subscribers.getAllActive();
       total = subs.length;
       if (this.mailer.configured) {
         for (const s of subs as any[]) {
+          const email = String(s.email ?? '').trim();
+          if (!isMailable(email)) {
+            invalid.push(email);
+            continue;
+          }
           const ok = await this.mailer.sendNewArticleEmail(
-            s.email,
+            email,
             article.title,
             article.slug,
             article.excerpt,
@@ -230,12 +246,19 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
       total,
       sent,
       failed,
+      // Noto'g'ri yozilgan manzillar soni (o'tkazib yuborildi, xato emas)
+      invalid: invalid.length,
       configured: this.mailer.configured,
       error: this.mailer.configured
         ? this.mailer.lastError
         : 'Pochta sozlanmagan (MAIL_HOST)',
     };
-    if (total && sent === 0) {
+    if (invalid.length) {
+      this.logger.warn(
+        `Noto'g'ri email manzillar o'tkazib yuborildi: ${invalid.length} ta`,
+      );
+    }
+    if (total - invalid.length > 0 && sent === 0) {
       this.logger.error(
         `Yangi maqola xati hech kimga ketmadi (${total} obunachi): ${result.error}`,
       );
