@@ -132,6 +132,18 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
     );
+    // Audio maqolalar (AudioService): Gemini TTS → MP3 (R2)
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS article_audio (
+        "articleId" INTEGER PRIMARY KEY,
+        url TEXT NOT NULL,
+        seconds INTEGER NOT NULL,
+        voice VARCHAR(40),
+        chars INTEGER,
+        model VARCHAR(80),
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
     // Test javoblari serverda tekshiriladi (QuizService.check): kirgan
     // foydalanuvchining har savoldagi BIRINCHI tanlovi — ball shundan hisoblanadi
     await this.sequelize.query(

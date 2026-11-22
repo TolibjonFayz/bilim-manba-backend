@@ -14,6 +14,7 @@ import {
   StreamableFile,
   Header,
   BadRequestException,
+  Logger,
 } from '@nestjs/common';
 import { ApiBearerAuth, ApiTags } from '@nestjs/swagger';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -30,6 +31,7 @@ import { SchoolService } from '../school/school.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PublishingService } from '../publishing/publishing.service';
 import { DigestService } from '../publishing/digest.service';
+import { AudioService } from '../audio/audio.service';
 import { MailerService } from '../mailer/mailer.service';
 import { IgRepostService } from '../publishing/ig-repost.service';
 import { memoryStorage } from 'multer';
@@ -39,6 +41,7 @@ import { memoryStorage } from 'multer';
 @UseGuards(JwtAuthGuard, RolesGuard)
 @Controller('admin')
 export class AdminController {
+  private readonly audioLogger = new Logger('AdminAudio');
   constructor(
     private adminService: AdminService,
     private drafts: DraftsService,
@@ -51,6 +54,7 @@ export class AdminController {
     private analytics: AnalyticsService,
     private publishing: PublishingService,
     private digest: DigestService,
+    private audio: AudioService,
     private mailer: MailerService,
     private igRepost: IgRepostService,
   ) {}
@@ -327,6 +331,31 @@ export class AdminController {
     } catch (err: any) {
       throw new BadRequestException(err?.message ?? 'Yuborilmadi');
     }
+  }
+
+  // Audio maqolalar (Gemini TTS): holat, sozlama, ovoz namunasi, bitta maqola
+  @Get('audio')
+  audioStatus() {
+    return this.audio.status();
+  }
+
+  @Put('audio')
+  audioSettings(@Body() body: { enabled?: boolean; voice?: string }) {
+    return this.audio.settings(body ?? {});
+  }
+
+  @Post('audio/sample')
+  audioSample(@Body() body: { voice?: string }) {
+    return this.audio.sample(String(body?.voice ?? ''));
+  }
+
+  // Bitta maqolani hozir ovozlashtirish (fonda — 1–5 daqiqa; Cloudflare 100 s da uzadi)
+  @Post('audio/generate/:id')
+  audioGenerate(@Param('id') id: string) {
+    void this.audio
+      .generateFor(Number(id))
+      .catch((err) => this.audioLogger.warn(`Audio (${id}): ${err?.message}`));
+    return { started: true };
   }
 
   // Email: pochta ishlayaptimi, obunachilar soni, oxirgi tarqatma natijasi

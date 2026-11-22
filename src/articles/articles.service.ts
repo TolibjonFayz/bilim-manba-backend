@@ -1,5 +1,6 @@
 import { Article, ArticleStatus, ArticleType } from './models/article.model';
 import { QuizService } from 'src/quiz/quiz.service';
+import { AudioService } from '../audio/audio.service';
 import { SeriesService } from 'src/series/series.service';
 import { SchoolService } from 'src/school/school.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
@@ -22,6 +23,7 @@ export class ArticlesService {
     private likesService: LikesService,
     private bookmarksService: BookmarksService,
     private quiz: QuizService,
+    private audio: AudioService,
     private series: SeriesService,
     private school: SchoolService,
   ) {}
@@ -107,10 +109,11 @@ export class ArticlesService {
     }
 
     // Maqola oxiridagi test va seriya (bo'lmasa null) — alohida jadvallardan
-    const [quiz, series, school] = await Promise.all([
+    const [quiz, series, school, audio] = await Promise.all([
       this.quiz.forArticlePublic(article.id),
       this.series.forArticle(article.id),
       this.school.forArticle(article.id),
+      this.audio.forArticle(article.id),
     ]);
 
     return {
@@ -120,6 +123,7 @@ export class ArticlesService {
       quiz,
       series,
       school,
+      audio,
     };
   }
 
@@ -186,7 +190,10 @@ export class ArticlesService {
     }
 
     // % va _ foydalanuvchi matnida oddiy belgi bo'lsin (LIKE maxsus belgilari)
-    const q = `%${query.trim().slice(0, 100).replace(/[\\%_]/g, '\\$&')}%`;
+    const q = `%${query
+      .trim()
+      .slice(0, 100)
+      .replace(/[\\%_]/g, '\\$&')}%`;
 
     return this.articleModel.findAll({
       where: {

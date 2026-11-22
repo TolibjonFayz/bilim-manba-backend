@@ -47,6 +47,20 @@ export class CloudflareService {
     return `${this.publicUrl}/${key}`;
   }
 
+  /** Audio maqola (MP3): brauzerda o'ynaladi, uzoq keshlanadi */
+  async uploadAudio(body: Buffer, key: string): Promise<string> {
+    await this.s3.send(
+      new PutObjectCommand({
+        Bucket: this.bucket,
+        Key: key,
+        Body: body,
+        ContentType: 'audio/mpeg',
+        CacheControl: 'public, max-age=31536000, immutable',
+      }),
+    );
+    return `${this.publicUrl}/${key}`;
+  }
+
   async uploadJson(content: object, filename: string): Promise<string> {
     const key = `articles/${filename}`;
     await this.s3.send(

@@ -13,6 +13,7 @@ import { CloudinaryService } from 'src/cloudinary/cloudinary.service';
 import { ArticleView } from 'src/article-views/models/article-view.model';
 import { PublishingService } from 'src/publishing/publishing.service';
 import { QuizService } from 'src/quiz/quiz.service';
+import { AudioService } from '../audio/audio.service';
 import {
   ATTACHMENT_TYPES,
   MAX_ATTACHMENT_BYTES,
@@ -36,6 +37,7 @@ export class AdminService {
     private cloudinaryService: CloudinaryService,
     private publishing: PublishingService,
     private quiz: QuizService,
+    private audio: AudioService,
   ) {}
 
   // Dashboard statistika
@@ -130,6 +132,8 @@ export class AdminService {
       rest.content !== before.content
     ) {
       void this.quiz.generateFor(id);
+      // Eski ovoz endi matnga mos emas — navbatda qayta yaratiladi
+      void this.audio.invalidate(id);
     }
 
     // Qoralama → chop etildi: sana yangilanadi va Telegram/email ishga tushadi

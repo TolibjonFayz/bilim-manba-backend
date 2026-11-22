@@ -91,5 +91,13 @@ await db.query(`INSERT INTO article_quizzes ("articleId", questions, "createdAt"
   { q: "Vaqt nega sekinlashadi?", options: ["Sovuq tufayli", "Shamol tufayli", "Kuchli tortishish tufayli", "Yorug'lik yo'qligi tufayli"], answer: 2, explain: "Kuchli gravitatsiya vaqtni sekinlashtiradi." },
   { q: "Film rejissyori kim?", options: ["Spilberg", "Kristofer Nolan", "Kemeron", "Skorseze"], answer: 1, explain: "Interstellar — Kristofer Nolan filmi." },
 ])]);
+// Audio pleyer namunasi: 5 s tovush (haqiqiy ovoz — faqat Render'da, Gemini kaliti bilan)
+{
+  const { toMp3 } = require(BE + "dist/audio/audio-tools");
+  const n = 24000 * 5, pcm = new Int16Array(n);
+  for (let i = 0; i < n; i++) pcm[i] = Math.round(6000 * Math.sin((2 * Math.PI * 330 * i) / 24000));
+  const mp3 = await toMp3(pcm, 24000);
+  await db.query(`INSERT INTO article_audio ("articleId", url, seconds, voice, chars, model) VALUES ($1, $2, 5, 'Charon', 100, 'test')`, [ist.id, `data:audio/mpeg;base64,${mp3.toString("base64")}`]);
+}
 await app.listen(3333);
 console.log("DEV API READY http://localhost:3333/api");

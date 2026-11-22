@@ -1,3 +1,4 @@
+import { AudioModule } from '../audio/audio.module';
 import { memoryStorage } from 'multer';
 import { Module } from '@nestjs/common';
 import { AdminService } from './admin.service';
@@ -36,6 +37,7 @@ import { AnalyticsModule } from 'src/analytics/analytics.module';
     QuizModule,
     SeriesModule,
     SchoolModule,
+    AudioModule,
     AnalyticsModule,
   ],
   // SearchConsoleService — DraftsModule'dan (bitta nusxa, umumiy kesh)

@@ -11,6 +11,7 @@ import { ArticleViewsModule } from 'src/article-views/article-views.module';
 import { QuizModule } from 'src/quiz/quiz.module';
 import { SeriesModule } from 'src/series/series.module';
 import { SchoolModule } from 'src/school/school.module';
+import { AudioModule } from '../audio/audio.module';
 
 @Module({
   imports: [
@@ -21,6 +22,7 @@ import { SchoolModule } from 'src/school/school.module';
     QuizModule,
     SeriesModule,
     SchoolModule,
+    AudioModule,
   ],
   providers: [ArticlesService],
   controllers: [ArticlesController],
