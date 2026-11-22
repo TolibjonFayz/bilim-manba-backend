@@ -23,6 +23,8 @@ const { DigestService } = require(BE + "dist/publishing/digest.service");
 const { AudioService } = require(BE + "dist/audio/audio.service");
 const { speechText, chunkText, findAudio, toPcm, joinPcm, toMp3 } = require(BE + "dist/audio/audio-tools");
 const { createTts } = require(BE + "dist/audio/gemini-tts");
+const { TelegramService } = require(BE + "dist/publishing/telegram.service");
+const { AudioController } = require(BE + "dist/audio/audio.controller");
 
 let fails = 0;
 const check = (name, ok, extra = "") => { console.log(`${ok ? "PASS" : "FAIL"}  ${name}${extra ? "  — " + extra : ""}`); if (!ok) fails++; };
@@ -90,7 +92,7 @@ const server = new PGLiteSocketServer({ db, port: 5551, host: "127.0.0.1" });
 await server.start();
 const mod = await Test.createTestingModule({
   imports: [
-    ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ GEMINI_API_KEY: "gem-test", AUDIO_DAILY_MAX: "2", CF_R2_PUBLIC_URL: "https://pub-test.r2.dev" })] }),
+    ConfigModule.forRoot({ isGlobal: true, ignoreEnvFile: true, load: [() => ({ GEMINI_API_KEY: "gem-test", AUDIO_DAILY_MAX: "2", CF_R2_PUBLIC_URL: "https://pub-test.r2.dev", TELEGRAM_BOT_TOKEN: "t", TELEGRAM_CHANNEL_ID: "@kanal" })] }),
     SequelizeModule.forRoot({ dialect: "postgres", host: "127.0.0.1", port: 5551, username: "postgres", password: "postgres", database: "postgres", autoLoadModels: true, synchronize: true, logging: false, pool: { max: 1 } }),
     DatabaseModule, ArticlesModule, AdminModule,
   ],
@@ -103,6 +105,11 @@ const instances = new Set([audio, app.get(ArticlesService).audio, app.get(AdminS
 check("AudioService bitta nusxa (fon jarayoni ikki marta ishlamaydi)", instances.size === 1, String(instances.size));
 await new Promise((r) => setTimeout(r, 300));
 audio.gapMs = 0;
+// Telegram — soxta (hamma nusxalarda bitta TelegramService)
+const tgCalls = [];
+const tgs = app.get(TelegramService);
+check("AudioService o'sha TelegramService'dan foydalanadi", audio.telegram === tgs);
+tgs.call = async (method, body) => { tgCalls.push({ method, body }); return { ok: true }; };
 mode = "generate"; calls.length = 0;
 audio.fetchOverride = fakeFetch;
 const uploads = [];
@@ -135,6 +142,11 @@ check("navbat: avval yangi (1 kunlik) maqola", (await audio.nextArticleId()) ===
 const t1 = await audio.tick();
 const row = (await db.query(`SELECT * FROM article_audio WHERE "articleId" = $1`, [C.id])).rows[0];
 check("tick: yangi maqola ovozlashtirildi va saqlandi", t1 === "done" && row?.url.startsWith("https://pub-test.r2.dev/audio/") && row.voice === "Kore" && row.seconds >= 1 && uploads.at(-1).size > 1000, JSON.stringify(row));
+const audioPosts = () => tgCalls.filter((c) => c.method === "sendAudio");
+const ap = audioPosts();
+check("yangi maqola audiosi kanalga: sendAudio, sarlavha, davomiylik, 2 tugma", ap.length === 1 && ap[0].body.chat_id === "@kanal" && ap[0].body.audio === row.url && ap[0].body.performer === "Bilim Manba" && ap[0].body.title === "Maqola yangi" && ap[0].body.duration === row.seconds && ap[0].body.reply_markup.inline_keyboard[0].length >= 1 && /Audio versiya/.test(ap[0].body.caption), JSON.stringify(ap[0]?.body).slice(0, 300));
+check("bytes saqlandi (podkast uchun)", Number(row.bytes) === uploads.at(-1).size, `${row.bytes} vs ${uploads.at(-1).size}`);
+check("kanalga ikkinchi marta yuborilmaydi", (await audio.postToTelegram(C.id)) === false && audioPosts().length === 1);
 check("TTS'ga ketgan matn: sarlavha bor, Manbalar yo'q", calls.some((c) => c.body.contents?.[0].parts[0].text.startsWith("Maqola yangi.")) && !calls.some((c) => /Manbalar/.test(JSON.stringify(c.body))));
 const bySlug = await articles.findBySlug("yangi");
 check("maqola sahifasida audio {url, seconds}", bySlug.audio?.url === row.url && bySlug.audio.seconds === row.seconds, JSON.stringify(bySlug?.audio));
@@ -143,12 +155,29 @@ calls.length = 0;
 await audio.tick();
 const aRow = (await db.query(`SELECT seconds FROM article_audio WHERE "articleId" = $1`, [A.id])).rows[0];
 check("keyingisi — eng ko'p o'qilgan; uzun matn bir necha bo'lakda", !!aRow && calls.length >= 2, `${calls.length} so'rov`);
+check("eski (10 kunlik) maqola audiosi kanalga chiqmaydi", audioPosts().length === 1);
 check("kunlik limit (2) — uchinchisi bugun yo'q", (await audio.tick()) === "skipped" && (await audio.status()).today === 2);
 // Ertaga
 check("ertaga — davom etadi", (await audio.tick(new Date(Date.now() + 86400e3))) === "done");
 check("hammasi tayyor — idle", (await audio.tick(new Date(Date.now() + 2 * 86400e3))) === "idle");
 const stDone = await audio.status();
 check("holat: 3/3 tayyor, xato yo'q", stDone.done === 3 && stDone.total === 3 && stDone.lastError === null && stDone.configured, JSON.stringify(stDone).slice(0, 200));
+
+// Podkast lentasi
+await db.query(`UPDATE article_audio SET bytes = NULL WHERE "articleId" = $1`, [A.id]);
+const feedFetch = audio.fetchOverride;
+audio.fetchOverride = async (url, init) => (init?.method === "HEAD" ? new Response(null, { headers: { "content-length": "123456" } }) : feedFetch(url, init));
+audio.feedCache = undefined;
+const feed = await app.get(AudioController).feed();
+check("lenta: 3 ta, eng yangisi birinchi, maydonlar to'liq", feed.length === 3 && feed[0].slug === "yangi" && feed.every((f) => f.url && f.seconds >= 1 && f.title && f.published) && feed[0].category === "Fan", JSON.stringify(feed[0]).slice(0, 200));
+check("lenta: noma'lum hajm R2'dan olinadi va saqlanadi", feed.find((f) => f.slug === "mashhur").bytes === 123456 && Number((await db.query(`SELECT bytes FROM article_audio WHERE "articleId" = $1`, [A.id])).rows[0].bytes) === 123456);
+audio.fetchOverride = feedFetch;
+// Kanalga yuborishni o'chirish
+await audio.settings({ telegram: false });
+await db.query(`UPDATE article_audio SET "tgPostedAt" = NULL WHERE "articleId" = $1`, [C.id]);
+check("sozlama: kanalga yuborish o'chirilsa — yuborilmaydi", (await audio.postToTelegram(C.id)) === false && (await audio.status()).telegram === false);
+await audio.settings({ telegram: true });
+check("qayta yoqilsa — yuboriladi", (await audio.postToTelegram(C.id)) === true);
 
 // Matn o'zgardi → audio o'chadi va qayta navbatga tushadi
 texts["https://r2.test/oddiy-v2.json"] = texts["https://r2.test/oddiy.json"];

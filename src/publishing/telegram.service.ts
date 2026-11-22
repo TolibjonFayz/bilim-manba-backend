@@ -156,6 +156,32 @@ export class TelegramService {
     return json.result;
   }
 
+  /**
+   * Maqolaning audio versiyasi — kanalga audio fayl (Telegram ichida
+   * tinglanadi, pleylistga tushadi). URL orqali: 20 MB gacha.
+   */
+  async sendArticleAudio(a: {
+    title: string;
+    slug: string;
+    url: string;
+    seconds: number;
+  }): Promise<boolean> {
+    if (!this.configured) return false;
+    const esc = (s: string) =>
+      s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    await this.call('sendAudio', {
+      chat_id: this.channel,
+      audio: a.url,
+      title: a.title.slice(0, 200),
+      performer: 'Bilim Manba',
+      duration: Math.round(a.seconds),
+      caption: `🎧 <b>Audio versiya:</b> ${esc(a.title)}\n\nYo'lda, ishda yoki uyda — quloq soling. To'liq matn, rasm va test — saytda.`,
+      parse_mode: 'HTML',
+      reply_markup: { inline_keyboard: this.readButtons(a.slug, 'audio') },
+    });
+    return true;
+  }
+
   /** Maqolani kanalga yuboradi. Sozlanmagan bo'lsa false qaytaradi. */
   async sendArticle(a: TelegramArticle): Promise<boolean> {
     if (!this.configured) {

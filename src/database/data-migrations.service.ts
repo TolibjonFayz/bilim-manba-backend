@@ -148,6 +148,13 @@ export class DataMigrationsService implements OnModuleInit {
         "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
       )`,
     );
+    // Podkast lentasi uchun fayl hajmi; kanalga audio yuborilgan vaqt
+    await this.sequelize.query(
+      'ALTER TABLE article_audio ADD COLUMN IF NOT EXISTS bytes INTEGER',
+    );
+    await this.sequelize.query(
+      'ALTER TABLE article_audio ADD COLUMN IF NOT EXISTS "tgPostedAt" TIMESTAMPTZ',
+    );
     // Test javoblari serverda tekshiriladi (QuizService.check): kirgan
     // foydalanuvchining har savoldagi BIRINCHI tanlovi — ball shundan hisoblanadi
     await this.sequelize.query(

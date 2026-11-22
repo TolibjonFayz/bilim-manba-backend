@@ -315,7 +315,9 @@ export class AdminController {
   }
 
   @Put('audio')
-  audioSettings(@Body() body: { enabled?: boolean; voice?: string }) {
+  audioSettings(
+    @Body() body: { enabled?: boolean; voice?: string; telegram?: boolean },
+  ) {
     return this.audio.settings(body ?? {});
   }
 

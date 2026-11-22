@@ -10,6 +10,7 @@ import { InjectConnection } from '@nestjs/sequelize';
 import { QueryTypes } from 'sequelize';
 import { Sequelize } from 'sequelize-typescript';
 import { CloudflareService } from '../cloudflare/cloudflare.service';
+import { TelegramService } from '../publishing/telegram.service';
 import { chunkText, joinPcm, speechText, toMp3 } from './audio-tools';
 import { createTts, TtsError } from './gemini-tts';
 
@@ -44,7 +45,24 @@ const K = {
   pauseUntil: 'audio_pause_until',
   lastError: 'audio_last_error',
   day: 'audio_day', // "2026-11-22:3" — bugun nechta maqola ovozlashtirildi
+  telegram: 'audio_telegram', // 'off' — kanalga audio yuborilmaydi
 };
+
+/** Faqat yangi maqolalar audiosi kanalga chiqadi (eskilari kanalni to'ldirib yubormasin) */
+const TG_FRESH_DAYS = 3;
+const FEED_CACHE_MS = 10 * 60 * 1000;
+
+export interface AudioFeedItem {
+  title: string;
+  slug: string;
+  excerpt: string | null;
+  coverImage: string | null;
+  category: string | null;
+  url: string;
+  seconds: number;
+  bytes: number | null;
+  published: string;
+}
 
 const tashkentDay = (d = new Date()) =>
   new Date(d.getTime() + TASHKENT_OFFSET_MS).toISOString().slice(0, 10);
@@ -73,7 +91,10 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
     private readonly config: ConfigService,
     @InjectConnection() private readonly sequelize: Sequelize,
     private readonly cloudflare: CloudflareService,
+    private readonly telegram: TelegramService,
   ) {}
+
+  private feedCache?: { at: number; items: AudioFeedItem[] };
 
   onModuleInit() {
     this.timer = setTimeout(() => void this.loop(), BOOT_DELAY_MS);
@@ -218,10 +239,11 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       `audio/${a.id}-${Date.now().toString(36)}.mp3`,
     );
     await this.sequelize.query(
-      `INSERT INTO article_audio ("articleId", url, seconds, voice, chars, model, "createdAt")
-       VALUES (:id, :url, :seconds, :voice, :chars, :model, now())
+      `INSERT INTO article_audio ("articleId", url, seconds, voice, chars, model, bytes, "createdAt")
+       VALUES (:id, :url, :seconds, :voice, :chars, :model, :bytes, now())
        ON CONFLICT ("articleId") DO UPDATE SET url = EXCLUDED.url, seconds = EXCLUDED.seconds,
-         voice = EXCLUDED.voice, chars = EXCLUDED.chars, model = EXCLUDED.model, "createdAt" = now()`,
+         voice = EXCLUDED.voice, chars = EXCLUDED.chars, model = EXCLUDED.model,
+         bytes = EXCLUDED.bytes, "createdAt" = now()`,
       {
         replacements: {
           id: a.id,
@@ -230,11 +252,99 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
           voice,
           chars: text.length,
           model,
+          bytes: mp3.length,
         },
       },
     );
+    this.feedCache = undefined;
     this.logger.log(`Audio tayyor: ${a.title} (${seconds} s, ${voice})`);
+    await this.postToTelegram(a.id).catch((err) =>
+      this.logger.warn(`Audio kanalga yuborilmadi (${a.id}): ${err?.message}`),
+    );
     return { url, seconds };
+  }
+
+  /**
+   * Yangi maqola (oxirgi 3 kun) audiosi kanalga — bir marta. Eski maqolalar
+   * audiosi kanalga chiqmaydi (kunda 5 tadan eski post kanalni to'ldirmasin).
+   */
+  async postToTelegram(articleId: number, now = new Date()) {
+    if (!this.telegram.configured) return false;
+    if ((await this.get(K.telegram)) === 'off') return false;
+    const [r] = await this.sequelize.query<{
+      title: string;
+      slug: string;
+      url: string;
+      seconds: number;
+    }>(
+      `SELECT a.title, a.slug, au.url, au.seconds FROM article_audio au
+       JOIN articles a ON a.id = au."articleId"
+       WHERE au."articleId" = :id AND au."tgPostedAt" IS NULL AND a.status = 'published'
+         AND COALESCE(a."scheduledAt", a."createdAt") > :since`,
+      {
+        replacements: {
+          id: articleId,
+          since: new Date(now.getTime() - TG_FRESH_DAYS * 24 * HOUR_MS),
+        },
+        type: QueryTypes.SELECT,
+      },
+    );
+    if (!r) return false;
+    await this.telegram.sendArticleAudio({ ...r, seconds: Number(r.seconds) });
+    await this.sequelize.query(
+      'UPDATE article_audio SET "tgPostedAt" = now() WHERE "articleId" = :id',
+      { replacements: { id: articleId } },
+    );
+    return true;
+  }
+
+  /**
+   * Podkast lentasi va /audio sahifasi uchun: audiosi bor maqolalar (eng
+   * yangisi birinchi). Hajmi noma'lum eski yozuvlar uchun R2'dan so'raladi.
+   */
+  async feed(): Promise<AudioFeedItem[]> {
+    const c = this.feedCache;
+    if (c && Date.now() - c.at < FEED_CACHE_MS) return c.items;
+    const rows = await this.sequelize.query<
+      AudioFeedItem & { articleId: number }
+    >(
+      `SELECT a.id AS "articleId", a.title, a.slug, a.excerpt, a."coverImage", c.name AS category,
+              au.url, au.seconds, au.bytes,
+              COALESCE(a."scheduledAt", a."createdAt") AS published
+       FROM article_audio au
+       JOIN articles a ON a.id = au."articleId"
+       LEFT JOIN categories c ON c.id = a."categoryId"
+       WHERE a.status = 'published'
+       ORDER BY COALESCE(a."scheduledAt", a."createdAt") DESC
+       LIMIT 300`,
+      { type: QueryTypes.SELECT },
+    );
+    for (const r of rows.filter((x) => !x.bytes).slice(0, 20)) {
+      try {
+        const res = await (this.fetchOverride ?? fetch)(r.url, {
+          method: 'HEAD',
+          signal: AbortSignal.timeout(8000),
+        });
+        const n = Number(res.headers.get('content-length'));
+        if (n > 0) {
+          r.bytes = n;
+          await this.sequelize.query(
+            'UPDATE article_audio SET bytes = :n WHERE "articleId" = :id',
+            { replacements: { n, id: r.articleId } },
+          );
+        }
+      } catch {
+        /* keyingi safar */
+      }
+    }
+    const items = rows.map(({ articleId: _id, ...r }) => ({
+      ...r,
+      seconds: Number(r.seconds),
+      bytes: r.bytes ? Number(r.bytes) : null,
+      published: new Date(r.published).toISOString(),
+    }));
+    this.feedCache = { at: Date.now(), items };
+    return items;
   }
 
   /** Navbatdagi maqola: avval oxirgi 3 kunda chop etilganlar, keyin eng ko'p o'qilganlar */
@@ -315,7 +425,14 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
-  async settings(body: { enabled?: boolean; voice?: string }) {
+  async settings(body: {
+    enabled?: boolean;
+    voice?: string;
+    telegram?: boolean;
+  }) {
+    if (body.telegram !== undefined) {
+      await this.set(K.telegram, body.telegram ? 'on' : 'off');
+    }
     if (body.voice !== undefined) {
       if (!VOICES.some((v) => v.id === body.voice))
         throw new BadRequestException("Noma'lum ovoz");
@@ -348,6 +465,7 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
         { type: QueryTypes.SELECT },
       ),
     ]);
+    const telegramSetting = await this.get(K.telegram);
     const [d, c] = String(day ?? '').split(':');
     return {
       configured: Boolean(this.key),
@@ -355,6 +473,8 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       voice,
       voices: VOICES,
       dailyMax: this.dailyMax,
+      telegram: telegramSetting !== 'off',
+      telegramConfigured: this.telegram.configured,
       today: d === tashkentDay() ? Number(c) || 0 : 0,
       pausedUntil: pause && new Date(pause) > new Date() ? pause : null,
       lastError: lastError ? JSON.parse(lastError) : null,
