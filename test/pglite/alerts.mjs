@@ -114,6 +114,9 @@ check("rejali maqola chop etildi", n === 1);
 check("kanal tugmasi Instant View (t.me/iv + rhash, utm saqlangan)", btn.startsWith("https://t.me/iv?url=") && btn.endsWith("&rhash=ab12cd34") && decodeURIComponent(btn.split("url=")[1].split("&rhash")[0]) === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel", btn);
 const pubMsg = tg.find((x) => x.body.chat_id === "777" && /chop etildi/.test(x.body.text));
 check("adminga: chop etildi, Telegram ✅, Instagram ulanmagan", pubMsg && /Telegram kanal: ✅/.test(pubMsg.body.text) && /Instagram: — ulanmagan/.test(pubMsg.body.text), pubMsg?.body.text);
+const site = chan?.body.reply_markup.inline_keyboard[0][1];
+check("kanal: 2-tugma 'Saytda o'qish' — oddiy sayt havolasi (utm_medium=channel_site)", site?.text === "🌐 Saytda o'qish" && site.url === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel_site", site);
+check("readButtons: rhash bo'lmasa bitta tugma", (() => { const c = tgs.config; const orig = c.get.bind(c); c.get = (k) => (k === "TELEGRAM_IV_RHASH" ? undefined : orig(k)); const b = tgs.readButtons("x"); c.get = orig; return b.length === 1 && b[0].length === 1 && b[0][0].url === "https://bilimmanba.uz/articles/x?utm_source=telegram&utm_medium=channel"; })());
 check("readUrl: rhash bo'lmasa oddiy havola", (() => { const c = tgs.config; const orig = c.get.bind(c); c.get = (k) => (k === "TELEGRAM_IV_RHASH" ? undefined : orig(k)); const u = tgs.readUrl("x"); c.get = orig; return u === "https://bilimmanba.uz/articles/x?utm_source=telegram&utm_medium=channel"; })());
 
 // 6) Telegram ishlamasa ham nashr to'xtamaydi

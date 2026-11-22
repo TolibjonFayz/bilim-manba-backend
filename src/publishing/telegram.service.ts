@@ -70,6 +70,25 @@ export class TelegramService {
       : url;
   }
 
+  /**
+   * Post tugmalari. Instant View yoqilgan bo'lsa ikkita: "Telegramda o'qish"
+   * (tezkor, Telegram ichida) va "Saytda o'qish" (saytga tashrif — testlar,
+   * ball, o'xshash maqolalar). IV bo'lmasa — bitta oddiy sayt havolasi.
+   */
+  readButtons(slug: string, medium = 'channel') {
+    const iv = this.readUrl(slug, medium);
+    const site = this.articleUrl(slug, `${medium}_site`);
+    if (iv === this.articleUrl(slug, medium)) {
+      return [[{ text: "📖 Maqolani o'qish", url: iv }]];
+    }
+    return [
+      [
+        { text: "⚡ Telegramda o'qish", url: iv },
+        { text: "🌐 Saytda o'qish", url: site },
+      ],
+    ];
+  }
+
   buildCaption(a: TelegramArticle): string {
     const esc = (s: string) =>
       s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
@@ -147,9 +166,7 @@ export class TelegramService {
     }
     const caption = this.buildCaption(a);
     const reply_markup = {
-      inline_keyboard: [
-        [{ text: "📖 Maqolani o'qish", url: this.readUrl(a.slug) }],
-      ],
+      inline_keyboard: this.readButtons(a.slug),
     };
     const photo = this.coverUrl(a.coverImage);
 

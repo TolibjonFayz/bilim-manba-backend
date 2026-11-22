@@ -13,8 +13,9 @@
 #  4. Ko'rinish to'g'ri bo'lsa, o'ng tomondagi "View in Telegram" havolasidan
 #     rhash=... qiymatini oling va Render → Environment ga
 #     TELEGRAM_IV_RHASH=<shu qiymat> qilib qo'shing.
-#  5. Shundan keyin kanaldagi "📖 Maqolani o'qish" tugmasi maqolani Telegram
-#     ichida (Instant View) ochadi. RHASH o'chirilsa — oddiy sayt havolasi.
+#  5. Shundan keyin kanal postida ikki tugma: "⚡ Telegramda o'qish" (Instant
+#     View) va "🌐 Saytda o'qish". RHASH o'chirilsa — bitta oddiy sayt havolasi.
+#  Ulangan: 2026-11-22 (rhash Render'da).
 
 # Faqat maqola sahifalari
 ?path: /articles/.+
@@ -28,3 +29,7 @@ site_name: "Bilim Manba"
 
 # Matn (bo'limlar, ro'yxatlar, iqtiboslar va "Manbalar")
 body:      //div[has-class("article-content")]
+
+# Oxirida saytga taklif (saytda yashirin <p class="iv-site-cta" hidden>):
+# test, ball, o'xshash maqolalar — o'quvchini saytga olib boramiz.
+@append_to($body): //p[has-class("iv-site-cta")]
