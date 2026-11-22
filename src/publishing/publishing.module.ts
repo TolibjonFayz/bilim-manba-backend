@@ -12,6 +12,7 @@ import { SocialImageService } from './social-image.service';
 import { AdminAlertService } from './admin-alert.service';
 import { ChannelQuizService } from './channel-quiz.service';
 import { IgRepostService } from './ig-repost.service';
+import { DigestService } from './digest.service';
 import { QuizModule } from '../quiz/quiz.module';
 import { CloudinaryModule } from '../cloudinary/cloudinary.module';
 
@@ -32,6 +33,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     AdminAlertService,
     ChannelQuizService,
     IgRepostService,
+    DigestService,
   ],
   exports: [
     PublishingService,
@@ -40,6 +42,7 @@ import { CloudinaryModule } from '../cloudinary/cloudinary.module';
     AdminAlertService,
     ChannelQuizService,
     IgRepostService,
+    DigestService,
   ],
 })
 export class PublishingModule {}

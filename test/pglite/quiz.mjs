@@ -86,6 +86,7 @@ check("AI promptida qoidalar va maqola matni", /Aynan 3 ta savol/.test(prompts.a
 // Maqola sahifasi testni qaytaradi; ro'yxatlar og'irlashmaydi
 const page = await articles.findBySlug("birinchi");
 check("maqola sahifasida quiz bor", page.quiz?.length === 3 && page.quiz[0].options.length === 4);
+check("sahifadagi quizda to'g'ri javob va izoh YO'Q", page.quiz.every((q) => !("answer" in q) && !("explain" in q)), JSON.stringify(page.quiz[0]));
 const list = await articles.findAll();
 check("maqolalar ro'yxatida quiz yo'q", list.length >= 1 && list.every((x) => x.toJSON().quiz === undefined));
 const draft = await mk("qoralama", "draft");

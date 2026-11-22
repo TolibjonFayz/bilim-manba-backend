@@ -65,6 +65,26 @@ export class AuthController {
     return req.user;
   }
 
+  @ApiOperation({ summary: 'Emailni tasdiqlash (xatdagi havola)' })
+  @RateLimit(20, 900)
+  @Post('verify-email')
+  verifyEmail(@Body() body: { token?: string }) {
+    return this.authService.verifyEmail(String(body?.token ?? ''));
+  }
+
+  @ApiOperation({ summary: 'Tasdiqlash xatini qayta yuborish' })
+  @ApiBearerAuth()
+  @RateLimit(
+    3,
+    3600,
+    'Xat yaqinda yuborilgan. Pochtangizni (Spam papkasini ham) tekshiring.',
+  )
+  @UseGuards(JwtAuthGuard)
+  @Post('resend-verification')
+  resendVerification(@Request() req) {
+    return this.authService.resendVerification(req.user.userId);
+  }
+
   @RateLimit(5, 900, "Juda ko'p so'rov. 15 daqiqadan so'ng urinib ko'ring.")
   @Post('forgot-password')
   forgotPassword(@Body() dto: ForgotPasswordDto) {

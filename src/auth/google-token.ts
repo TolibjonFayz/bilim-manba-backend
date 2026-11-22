@@ -50,7 +50,8 @@ export function resetGoogleKeyCache() {
   cache = null;
 }
 
-const b64json = (s: string) => JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
+const b64json = (s: string) =>
+  JSON.parse(Buffer.from(s, 'base64url').toString('utf8'));
 
 export async function verifyGoogleIdToken(
   token: string,

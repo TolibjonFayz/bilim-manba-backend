@@ -66,24 +66,56 @@ const QS = [
   { q: "3?", options: ["a", "b", "c", "d"], answer: 3, explain: "" },
 ];
 for (const a of [A, B, C]) await db.query(`INSERT INTO article_quizzes ("articleId", questions) VALUES ($1, $2)`, [a.id, JSON.stringify(QS)]);
-const send = (slug, answers, userId, correct = 3) => articlesCtrl.quizResult(slug, { correct, answers }, { user: userId ? { userId } : undefined });
+const ctx = (userId) => ({ user: userId ? { userId } : undefined });
+const pick = (slug, i, choice, userId) => quizCtrl.check(slug, { i, choice }, ctx(userId));
+// Foydalanuvchi har savolni bosadi (birinchi tanlov serverda yoziladi), keyin natija yuboriladi
+const send = async (slug, answers, userId, correct = 3) => {
+  for (let i = 0; i < answers.length; i++) if (answers[i] >= 0 && answers[i] <= 3) await pick(slug, i, answers[i], userId).catch(() => {});
+  return articlesCtrl.quizResult(slug, { correct, answers }, ctx(userId));
+};
 
-// 3) Natija yozish
+// 3) Javobni tekshirish (to'g'ri javob sahifaga berilmaydi)
+const c1 = await pick("a", 1, 2);
+check("check: to'g'ri javob → correct, answer va izoh qaytadi", c1.correct === true && c1.answer === 2 && "explain" in c1, JSON.stringify(c1));
+const c2 = await pick("a", 1, 0);
+check("check: noto'g'ri javob → correct false, to'g'risi 2", c2.correct === false && c2.answer === 2);
+let bad = ""; try { await pick("a", 7, 0); } catch (e) { bad = e.constructor.name; }
+let bad2 = ""; try { await pick("a", 0, 9); } catch (e) { bad2 = e.constructor.name; }
+check("check: yo'q savol / variant 0–3 dan tashqari → BadRequest", bad === "BadRequestException" && bad2 === "BadRequestException", bad + " " + bad2);
+check("mehmon check — bazaga tanlov yozilmaydi", (await db.query(`SELECT COUNT(*)::int n FROM quiz_picks`)).rows[0].n === 0);
+
+// 4) Natija yozish
 const r1 = await send("a", [0, 2, 3], ali, 0);
-check("javoblar serverda tekshiriladi (mijoz 'correct' e'tiborsiz): 3/3, 40 ball", r1.correct === 3 && r1.awarded && r1.points === 40, JSON.stringify(r1));
+check("ball serverdagi tanlovlardan: 3/3, 40 ball (mijoz 'correct' e'tiborsiz)", r1.correct === 3 && r1.awarded && r1.points === 40, JSON.stringify(r1));
 check("javobda haftalik ball va o'rin", r1.week.points === 40 && r1.week.rank === 1);
 const r2 = await send("a", [0, 0, 0], ali);
-check("o'sha testni qayta yechish — ball berilmaydi", r2.awarded === false && r2.points === 0 && r2.correct === 1);
-const r3 = await send("b", [0, 2], ali);
-check("javoblar soni noto'g'ri — ball yo'q, faqat statistika", r3.ok && r3.awarded === undefined, JSON.stringify(r3));
-const r4 = await send("b", [0, 2, 9], ali);
-check("variant 0–3 dan tashqarida — ball yo'q", r4.awarded === undefined);
+check("o'sha testni qayta yechish — ball berilmaydi", r2.awarded === false && r2.points === 0 && r2.correct === 3, JSON.stringify(r2));
+// Aldash: avval noto'g'ri bosib, keyin to'g'ri javobni bilib "answers" bilan yuborish
+await pick("b", 0, 1, guli); await pick("b", 1, 1, guli); await pick("b", 2, 1, guli);
+const cheat = await articlesCtrl.quizResult("b", { correct: 3, answers: [0, 2, 3] }, ctx(guli));
+check("aldash: mijoz to'g'ri 'answers' yuborsa ham — birinchi tanlovlar bo'yicha 0 ball", cheat.awarded === true && cheat.correct === 0 && cheat.points === 0, JSON.stringify(cheat));
+const partial = await articlesCtrl.quizResult("c", { correct: 3, answers: [0, 2, 3] }, ctx(ali));
+check("savollar bosilmagan (tanlov yo'q) — ball yo'q, faqat statistika", partial.ok && partial.awarded === undefined, JSON.stringify(partial));
 const g = await send("b", [0, 2, 3], undefined);
 check("mehmon: natija statistikaga, ball yo'q", g.ok && g.correct === 3 && g.awarded === undefined);
 const stat = (await db.query(`SELECT attempts, "correctTotal" FROM article_quizzes WHERE "articleId" = $1`, [A.id])).rows[0];
 check("statistika: har urinish sanaladi", stat.attempts === 2 && stat.correctTotal === 4, JSON.stringify(stat));
 let nf = ""; try { await send("yoq", [0, 0, 0], ali); } catch (e) { nf = e.constructor.name; }
 check("yo'q maqola — NotFound", nf === "NotFoundException");
+
+// 5) Mehmon natijasini yangi akkauntga saqlash (claim)
+const newbie = await mkUser("Yangi Mehmon");
+const cl = await quizCtrl.claim({ slug: "c", answers: [0, 2, 0] }, { user: { userId: newbie } });
+check("claim: yangi akkaunt → 2/3, 20 ball", cl.awarded === true && cl.correct === 2 && cl.points === 20, JSON.stringify(cl));
+let again = ""; try { await quizCtrl.claim({ slug: "a", answers: [0, 2, 3] }, { user: { userId: newbie } }); } catch (e) { again = e.constructor.name; }
+check("claim: ikkinchi marta — Forbidden (bali bor)", again === "ForbiddenException", again);
+const oldUser = await mkUser("Eski Akkaunt");
+await db.query(`UPDATE users SET "createdAt" = now() - interval '3 days' WHERE id = $1`, [oldUser]);
+let old = ""; try { await quizCtrl.claim({ slug: "a", answers: [0, 2, 3] }, { user: { userId: oldUser } }); } catch (e) { old = e.constructor.name; }
+check("claim: 24 soatdan eski akkaunt — Forbidden", old === "ForbiddenException", old);
+let badc = ""; try { await quizCtrl.claim({ slug: "a", answers: [0, 2] }, { user: { userId: await mkUser("Boshqa Yangi") } }); } catch (e) { badc = e.constructor.name; }
+check("claim: noto'g'ri javoblar soni — BadRequest", badc === "BadRequestException", badc);
+await db.query(`DELETE FROM quiz_scores WHERE "userId" IN ($1, $2)`, [newbie, guli]);
 
 await send("b", [0, 2, 0], vali);   // 20
 await send("c", [0, 2, 3], vali);   // 40 → vali 60

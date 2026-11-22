@@ -29,6 +29,7 @@ import { SeriesService } from '../series/series.service';
 import { SchoolService } from '../school/school.service';
 import { FileInterceptor } from '@nestjs/platform-express';
 import { PublishingService } from '../publishing/publishing.service';
+import { DigestService } from '../publishing/digest.service';
 import { MailerService } from '../mailer/mailer.service';
 import { IgRepostService } from '../publishing/ig-repost.service';
 import { memoryStorage } from 'multer';
@@ -49,6 +50,7 @@ export class AdminController {
     private channelQuiz: ChannelQuizService,
     private analytics: AnalyticsService,
     private publishing: PublishingService,
+    private digest: DigestService,
     private mailer: MailerService,
     private igRepost: IgRepostService,
   ) {}
@@ -329,8 +331,18 @@ export class AdminController {
 
   // Email: pochta ishlayaptimi, obunachilar soni, oxirgi tarqatma natijasi
   @Get('mail')
-  mailStatus() {
-    return this.publishing.mailStatus();
+  async mailStatus() {
+    const [mail, digest] = await Promise.all([
+      this.publishing.mailStatus(),
+      this.digest.status().catch(() => null),
+    ]);
+    return { ...mail, digest };
+  }
+
+  // Haftalik dayjest: yoqish/o'chirish
+  @Put('mail/digest')
+  digestToggle(@Body() body: { enabled?: boolean }) {
+    return this.digest.setEnabled(body?.enabled !== false);
   }
 
   // Sinov xati — adminning o'z emailiga
@@ -416,7 +428,8 @@ export class AdminController {
   }
 
   @Post('upload/image')
-  @UseInterceptors(FileInterceptor('file', {
+  @UseInterceptors(
+    FileInterceptor('file', {
       storage: memoryStorage(),
       limits: { fileSize: 6 * 1024 * 1024, files: 1 },
     }),

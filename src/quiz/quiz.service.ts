@@ -1,4 +1,6 @@
 import {
+  BadRequestException,
+  ForbiddenException,
   Injectable,
   Logger,
   NotFoundException,
@@ -23,6 +25,14 @@ export interface QuizQuestion {
 }
 
 const QUESTIONS = 3;
+/** Mehmon testni yechib, keyin ro'yxatdan o'tsa — bali shu muddat ichida saqlanadi */
+const CLAIM_WINDOW_MS = 24 * 60 * 60 * 1000;
+
+/** Sahifaga beriladigan savol: to'g'ri javob va izohsiz (ular serverda tekshiriladi) */
+export type PublicQuizQuestion = Pick<QuizQuestion, 'q' | 'options'>;
+
+export const publicQuiz = (list: QuizQuestion[] | null) =>
+  list ? list.map(({ q, options }) => ({ q, options })) : null;
 // Eski maqolalarga test tuzish: ishga tushgandan keyin kutish va maqolalar orasidagi tanaffus
 // (Gemini bepul tarifi daqiqasiga cheklangan, sayt ishiga xalaqit bermasin)
 const BACKFILL_DELAY_MS = 5 * 60 * 1000;
@@ -161,6 +171,65 @@ export class QuizService implements OnModuleInit, OnModuleDestroy {
     }
   }
 
+  /** Maqola sahifasi uchun: savollar javobsiz (javoblar /quiz-check orqali) */
+  async forArticlePublic(articleId: number) {
+    return publicQuiz(await this.forArticle(articleId));
+  }
+
+  private async publishedId(slug: string) {
+    const article = await this.articleModel.findOne({
+      where: { slug, status: ArticleStatus.PUBLISHED },
+      attributes: ['id'],
+    });
+    if (!article) throw new NotFoundException('Maqola topilmadi');
+    return article.id;
+  }
+
+  /**
+   * Bitta savolga javobni tekshiradi: to'g'rimi, to'g'ri javob va izoh.
+   * Kirgan foydalanuvchining shu savoldagi BIRINCHI tanlovi yoziladi —
+   * keyin javobni bilib olib qayta yuborish ballni o'zgartirmaydi.
+   */
+  async check(slug: string, idx: number, choice: number, userId?: number) {
+    const articleId = await this.publishedId(slug);
+    const questions = await this.forArticle(articleId);
+    if (!questions) throw new NotFoundException("Bu maqolada test yo'q");
+    const q = questions[idx];
+    if (
+      !q ||
+      !Number.isInteger(idx) ||
+      !Number.isInteger(choice) ||
+      choice < 0 ||
+      choice > 3
+    )
+      throw new BadRequestException("Noto'g'ri savol yoki javob");
+    if (userId) {
+      await this.sequelize.query(
+        `INSERT INTO quiz_picks ("userId", "articleId", idx, choice, "createdAt")
+         VALUES (:userId, :articleId, :idx, :choice, now())
+         ON CONFLICT ("userId", "articleId", idx) DO NOTHING`,
+        { replacements: { userId, articleId, idx, choice } },
+      );
+    }
+    return {
+      correct: q.answer === choice,
+      answer: q.answer,
+      explain: q.explain,
+    };
+  }
+
+  /** Foydalanuvchining shu testdagi birinchi tanlovlari (savol tartibida) yoki null */
+  private async firstPicks(userId: number, articleId: number, n: number) {
+    const rows = await this.sequelize.query<{ idx: number; choice: number }>(
+      `SELECT idx, choice FROM quiz_picks WHERE "userId" = :userId AND "articleId" = :articleId`,
+      { replacements: { userId, articleId }, type: QueryTypes.SELECT },
+    );
+    const picks: number[] = [];
+    for (const r of rows) picks[Number(r.idx)] = Number(r.choice);
+    for (let i = 0; i < n; i++) if (!Number.isInteger(picks[i])) return null;
+    return picks.slice(0, n);
+  }
+
   /** Maqola matnidan test tuzadi va saqlaydi. Xato bo'lsa — false (sayt ishlayveradi) */
   async generateFor(articleId: number, html?: string): Promise<boolean> {
     if (this.busy.has(articleId)) return false;
@@ -263,10 +332,10 @@ Javob faqat JSON: {"questions": [{"q": "...", "options": ["...", "...", "...", "
   }
 
   /**
-   * O'quvchi testni tugatdi: urinishlar va to'g'ri javoblar yig'indisi.
-   * answers (tanlangan variantlar) kelsa, to'g'ri javoblar soni serverda
-   * hisoblanadi; kirgan foydalanuvchiga shu asosda ball beriladi (har test
-   * uchun bir marta). answers'siz eski mijozlar — faqat statistika.
+   * O'quvchi testni tugatdi: urinishlar va to'g'ri javoblar yig'indisi
+   * (statistika). Kirgan foydalanuvchiga ball faqat serverda yozilgan
+   * birinchi tanlovlar (quiz_picks) asosida beriladi — mijoz yuborgan
+   * "answers" ballga ta'sir qilmaydi.
    */
   async recordResult(
     slug: string,
@@ -274,25 +343,18 @@ Javob faqat JSON: {"questions": [{"q": "...", "options": ["...", "...", "...", "
     answers?: unknown,
     userId?: number,
   ) {
-    const article = await this.articleModel.findOne({
-      where: { slug, status: ArticleStatus.PUBLISHED },
-      attributes: ['id'],
-    });
-    if (!article) throw new NotFoundException('Maqola topilmadi');
+    const articleId = await this.publishedId(slug);
+    const questions = await this.forArticle(articleId);
 
     let n = Math.round(Number(correct));
     let total = QUESTIONS;
-    let verified = false;
-    if (Array.isArray(answers)) {
-      const questions = await this.forArticle(article.id);
+    if (questions && Array.isArray(answers)) {
       if (
-        questions &&
         answers.length === questions.length &&
         answers.every((a) => Number.isInteger(a) && a >= 0 && a < 4)
       ) {
         n = questions.filter((q, i) => q.answer === answers[i]).length;
         total = questions.length;
-        verified = true;
       }
     }
     if (!Number.isFinite(n) || n < 0 || n > total) return { ok: false };
@@ -300,17 +362,76 @@ Javob faqat JSON: {"questions": [{"q": "...", "options": ["...", "...", "...", "
     await this.sequelize.query(
       `UPDATE article_quizzes SET attempts = attempts + 1, "correctTotal" = "correctTotal" + :n
        WHERE "articleId" = :id`,
-      { replacements: { id: article.id, n } },
+      { replacements: { id: articleId, n } },
     );
-    if (!userId || !verified) return { ok: true, correct: n, total };
+    if (!userId || !questions) return { ok: true, correct: n, total };
 
+    const picks = await this.firstPicks(userId, articleId, questions.length);
+    if (!picks) return { ok: true, correct: n, total };
+    const got = questions.filter((q, i) => q.answer === picks[i]).length;
     const { awarded, points } = await this.points.award(
       userId,
-      article.id,
-      n,
-      total,
+      articleId,
+      got,
+      questions.length,
     );
     const week = await this.points.stats(userId, 'week');
-    return { ok: true, correct: n, total, awarded, points, week };
+    return {
+      ok: true,
+      correct: got,
+      total: questions.length,
+      awarded,
+      points,
+      week,
+    };
+  }
+
+  /**
+   * Mehmon testni yechdi, keyin ro'yxatdan o'tdi/kirdi: o'sha natija bir
+   * marta ballga aylanadi. Suiiste'molga qarshi: faqat akkaunt ochilganiga
+   * 24 soatdan oshmagan va hali hech qanday bali yo'q foydalanuvchiga.
+   */
+  async claim(userId: number, slug: string, answers: unknown) {
+    const articleId = await this.publishedId(slug);
+    const questions = await this.forArticle(articleId);
+    if (
+      !questions ||
+      !Array.isArray(answers) ||
+      answers.length !== questions.length ||
+      !answers.every((a) => Number.isInteger(a) && a >= 0 && a < 4)
+    )
+      throw new BadRequestException("Noto'g'ri natija");
+
+    const [u] = await this.sequelize.query<{
+      createdAt: string;
+      scores: string;
+    }>(
+      `SELECT u."createdAt", (SELECT COUNT(*) FROM quiz_scores s WHERE s."userId" = u.id) AS scores
+       FROM users u WHERE u.id = :userId`,
+      { replacements: { userId }, type: QueryTypes.SELECT },
+    );
+    const fresh =
+      u && Date.now() - new Date(u.createdAt).getTime() <= CLAIM_WINDOW_MS;
+    if (!fresh || Number(u.scores) > 0)
+      throw new ForbiddenException(
+        'Mehmon sifatidagi natija faqat yangi akkauntga bir marta saqlanadi',
+      );
+
+    const got = questions.filter((q, i) => q.answer === answers[i]).length;
+    const { awarded, points } = await this.points.award(
+      userId,
+      articleId,
+      got,
+      questions.length,
+    );
+    const week = await this.points.stats(userId, 'week');
+    return {
+      ok: true,
+      correct: got,
+      total: questions.length,
+      awarded,
+      points,
+      week,
+    };
   }
 }

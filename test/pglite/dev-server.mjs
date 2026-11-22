@@ -84,5 +84,12 @@ for (const [title, slug, cat, html] of seed) {
 }
 // Ilova fayl namunasi (maqola sahifasidagi "Yuklab olish" bloki uchun)
 await db.query(`UPDATE articles SET attachments = $1 WHERE slug = 'interstellar'`, [JSON.stringify([{ name: "Interstellar — ilmiy qo'llanma.pdf", url: `http://localhost:${CONTENT_PORT}/files/qollanma.pdf`, size: 2457600, ext: "pdf" }, { name: "Kinoteatr jadvali.xlsx", url: `http://localhost:${CONTENT_PORT}/files/jadval.xlsx`, size: 18432, ext: "xlsx" }])]);
+// Maqola oxiridagi test namunasi (to'g'ri javoblar: 0, 2, 1)
+const { rows: [ist] } = await db.query(`SELECT id FROM articles WHERE slug = 'interstellar'`);
+await db.query(`INSERT INTO article_quizzes ("articleId", questions, "createdAt") VALUES ($1, $2, now())`, [ist.id, JSON.stringify([
+  { q: "Filmda qahramonlar qayerga uchadi?", options: ["Qora tuynuk yonidagi sayyoralarga", "Oyga", "Marsga", "Venera'ga"], answer: 0, explain: "Ular Gargantua qora tuynugi atrofidagi sayyoralarni o'rganadi." },
+  { q: "Vaqt nega sekinlashadi?", options: ["Sovuq tufayli", "Shamol tufayli", "Kuchli tortishish tufayli", "Yorug'lik yo'qligi tufayli"], answer: 2, explain: "Kuchli gravitatsiya vaqtni sekinlashtiradi." },
+  { q: "Film rejissyori kim?", options: ["Spilberg", "Kristofer Nolan", "Kemeron", "Skorseze"], answer: 1, explain: "Interstellar — Kristofer Nolan filmi." },
+])]);
 await app.listen(3333);
 console.log("DEV API READY http://localhost:3333/api");

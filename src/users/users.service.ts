@@ -47,7 +47,14 @@ export class UsersService {
     if (cached && Date.now() - cached.at < AUTH_CACHE_MS) return cached.state;
 
     const user = await this.userModel.findByPk(id, {
-      attributes: ['id', 'email', 'role', 'plan', 'isActive', 'passwordChangedAt'],
+      attributes: [
+        'id',
+        'email',
+        'role',
+        'plan',
+        'isActive',
+        'passwordChangedAt',
+      ],
     });
     if (!user) return null;
     const v = user.dataValues;
@@ -82,6 +89,11 @@ export class UsersService {
     });
   }
 
+  /** To'liq model (ichki ishlar uchun: tasdiqlash va h.k.) */
+  async findRawById(id: number) {
+    return this.userModel.findByPk(id);
+  }
+
   //Get user by id
   async findById(id: number) {
     const user = await this.userModel.findByPk(id, {
@@ -94,6 +106,7 @@ export class UsersService {
         'premiumExpiresAt',
         'createdAt',
         'isPublic',
+        'emailVerifiedAt',
       ],
     });
     if (!user) throw new NotFoundException('User topilmadi');

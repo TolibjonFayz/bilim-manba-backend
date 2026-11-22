@@ -108,7 +108,7 @@ export class ArticlesService {
 
     // Maqola oxiridagi test va seriya (bo'lmasa null) — alohida jadvallardan
     const [quiz, series, school] = await Promise.all([
-      this.quiz.forArticle(article.id),
+      this.quiz.forArticlePublic(article.id),
       this.series.forArticle(article.id),
       this.school.forArticle(article.id),
     ]);

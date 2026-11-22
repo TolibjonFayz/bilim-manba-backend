@@ -52,4 +52,9 @@ export class User extends Model {
   // Ustun DataMigrationsService.ensureSchema orqali qo'shiladi.
   @Column({ type: DataType.DATE, allowNull: true })
   declare passwordChangedAt: Date | null;
+
+  // Email tasdiqlangan vaqt (Google orqali kirganlar — darhol). Ustun
+  // ensureSchema orqali qo'shiladi
+  @Column({ type: DataType.DATE, allowNull: true })
+  declare emailVerifiedAt: Date | null;
 }

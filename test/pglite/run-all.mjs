@@ -5,7 +5,7 @@ import { spawnSync } from "child_process";
 import { fileURLToPath } from "url";
 
 const DIR = fileURLToPath(new URL(".", import.meta.url));
-const ALL = ["security", "json-repair", "features", "claude", "analytics", "kino", "alerts", "quiz", "quiz-points", "fact-check", "school", "series", "stats", "channel-quiz", "drafts"];
+const ALL = ["security", "json-repair", "features", "growth", "claude", "analytics", "kino", "alerts", "quiz", "quiz-points", "fact-check", "school", "series", "stats", "channel-quiz", "drafts"];
 const pick = process.argv.slice(2);
 const suites = pick.length ? ALL.filter((s) => pick.includes(s)) : ALL;
 

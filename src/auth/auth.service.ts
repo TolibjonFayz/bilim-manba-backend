@@ -15,6 +15,15 @@ import { takeToken, tooMany } from '../common/rate-limit';
 import { verifyGoogleIdToken } from './google-token';
 import { GoogleLoginDto } from './dto/google-login.dto';
 import { ConfigService } from '@nestjs/config';
+import { InjectConnection } from '@nestjs/sequelize';
+import { QueryTypes } from 'sequelize';
+import { Sequelize } from 'sequelize-typescript';
+import { MailArticle } from 'src/mailer/mailer.service';
+import {
+  checkVerifyToken,
+  parseVerifyToken,
+  verifyEmailUrl,
+} from '../common/verify-token';
 
 // Mavjud bo'lmagan email uchun ham parol solishtiriladi — javob vaqti
 // bo'yicha "bu email ro'yxatda bor/yo'q" ni bilib bo'lmasin
@@ -32,14 +41,80 @@ export class AuthService {
     private mailerService: MailerService,
     private analytics: AnalyticsService,
     private config: ConfigService,
+    @InjectConnection() private sequelize: Sequelize,
   ) {}
+
+  /** Xush kelibsiz xati uchun: eng ko'p o'qilgan 3 ta maqola */
+  private async popular(limit = 3): Promise<MailArticle[]> {
+    try {
+      return await this.sequelize.query<MailArticle>(
+        `SELECT a.title, a.slug, a.excerpt, a."coverImage", c.name AS category
+         FROM articles a LEFT JOIN categories c ON c.id = a."categoryId"
+         WHERE a.status = 'published'
+         ORDER BY a."viewCount" DESC LIMIT :limit`,
+        { replacements: { limit }, type: QueryTypes.SELECT },
+      );
+    } catch {
+      return [];
+    }
+  }
+
+  /** Ro'yxatdan o'tgach xat: kutmaymiz — javob tez qaytsin, xato saytni to'xtatmasin */
+  private welcome(
+    user: { id: number; email: string; fullName: string },
+    verify: boolean,
+  ) {
+    void (async () => {
+      const url = verify ? verifyEmailUrl(user.id, user.email) : null;
+      await this.mailerService.sendWelcomeEmail(
+        user.email,
+        user.fullName,
+        url,
+        await this.popular(),
+      );
+    })().catch(() => {});
+  }
+
+  /** Emailni tasdiqlash havolasi (xatdan) */
+  async verifyEmail(token: string) {
+    const t = parseVerifyToken(token);
+    const user = t ? await this.usersService.findRawById(t.userId) : null;
+    if (!user || !checkVerifyToken(token, user.dataValues.email)) {
+      throw new BadRequestException(
+        "Havola noto'g'ri yoki muddati o'tgan. Profilingizdan yangi xat so'rang.",
+      );
+    }
+    if (!user.dataValues.emailVerifiedAt) {
+      await user.update({ emailVerifiedAt: new Date() });
+    }
+    return { ok: true, message: 'Email tasdiqlandi' };
+  }
+
+  /** Tasdiqlash xatini qayta yuborish (profildan) */
+  async resendVerification(userId: number) {
+    const user = await this.usersService.findRawById(userId);
+    if (!user) throw new BadRequestException('Foydalanuvchi topilmadi');
+    if (user.dataValues.emailVerifiedAt) return { ok: true, already: true };
+    const sent = await this.mailerService.sendWelcomeEmail(
+      user.dataValues.email,
+      user.dataValues.fullName,
+      verifyEmailUrl(user.id, user.dataValues.email),
+      [],
+    );
+    if (!sent)
+      throw new BadRequestException("Xat yuborilmadi, keyinroq urinib ko'ring");
+    return { ok: true };
+  }
 
   private get googleClientId() {
     return (this.config.get<string>('GOOGLE_CLIENT_ID') ?? '').trim();
   }
 
   googleConfig() {
-    return { enabled: Boolean(this.googleClientId), clientId: this.googleClientId || null };
+    return {
+      enabled: Boolean(this.googleClientId),
+      clientId: this.googleClientId || null,
+    };
   }
 
   /**
@@ -70,6 +145,16 @@ export class AuthService {
         password: await bcrypt.hash(random, 10),
       });
       isNew = true;
+      // Google emailni o'zi tasdiqlagan
+      await user.update({ emailVerifiedAt: new Date() });
+      this.welcome(
+        {
+          id: user.id,
+          email: user.dataValues.email,
+          fullName: user.dataValues.fullName,
+        },
+        false,
+      );
       await this.analytics.markSignup(
         'users',
         user.id,
@@ -79,6 +164,9 @@ export class AuthService {
     }
     if (user.dataValues.isActive === false) {
       throw new UnauthorizedException('Akkaunt bloklangan');
+    }
+    if (!isNew && !user.dataValues.emailVerifiedAt) {
+      await user.update({ emailVerifiedAt: new Date() });
     }
     return {
       userId: user.id,
@@ -105,6 +193,14 @@ export class AuthService {
       password: hashed,
     });
     await this.analytics.markSignup('users', user.id, signupSource, signupPath);
+    this.welcome(
+      {
+        id: user.id,
+        email: user.dataValues.email,
+        fullName: user.dataValues.fullName,
+      },
+      true,
+    );
 
     return {
       userId: user.id,

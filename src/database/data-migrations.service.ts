@@ -132,6 +132,18 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
     );
+    // Test javoblari serverda tekshiriladi (QuizService.check): kirgan
+    // foydalanuvchining har savoldagi BIRINCHI tanlovi — ball shundan hisoblanadi
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS quiz_picks (
+        "userId" INTEGER NOT NULL,
+        "articleId" INTEGER NOT NULL,
+        idx SMALLINT NOT NULL,
+        choice SMALLINT NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY ("userId", "articleId", idx)
+      )`,
+    );
     // Saytning o'z statistikasi (AnalyticsService): tashriflar va hodisalar
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS analytics_sessions (
@@ -190,6 +202,9 @@ export class DataMigrationsService implements OnModuleInit {
     // Email qaysi formada (ro'yxatdan o'tish / pastdagi obuna ...) va qaysi sahifada kiritilgan
     await this.sequelize.query(
       'ALTER TABLE users ADD COLUMN IF NOT EXISTS "passwordChangedAt" TIMESTAMPTZ',
+    );
+    await this.sequelize.query(
+      'ALTER TABLE users ADD COLUMN IF NOT EXISTS "emailVerifiedAt" TIMESTAMPTZ',
     );
     await this.sequelize.query(
       'ALTER TABLE articles ADD COLUMN IF NOT EXISTS attachments JSONB',

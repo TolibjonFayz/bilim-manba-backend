@@ -37,10 +37,17 @@ export class SubscribersService {
         "Havola noto'g'ri yoki eskirgan. Eng so'nggi xatdagi havoladan foydalaning.",
       );
     }
-    await this.subscriberModel.update(
+    const updated = await this.subscriberModel.update(
       { isActive: false },
       { where: { email: email.trim() } },
     );
+    // Obunachi bo'lmagan (ro'yxatdan o'tgan foydalanuvchi) — haftalik dayjest
+    // unga qayta ketmasligi uchun "bekor qilgan" sifatida eslab qolinadi
+    if (!updated[0]) {
+      await this.subscriberModel
+        .create({ email: email.trim(), isActive: false } as any)
+        .catch(() => {});
+    }
     return { message: 'Obuna bekor qilindi' };
   }
 
