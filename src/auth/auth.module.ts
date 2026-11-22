@@ -1,4 +1,4 @@
-import { MailerModule } from 'src/mailer/models/mailer.model';
+import { MailerModule } from '../mailer/mailer.module';
 import { ConfigModule, ConfigService } from '@nestjs/config';
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';

@@ -161,7 +161,8 @@ if (!REAL) {
   const pickedName = visionReqs[0]?.user.match(/ 1\) (.*?) — /)?.[1] ?? "";
   check("Gemini tanlovi (1-raqam) muqova bo'ldi", coverLi.includes(pickedName.slice(0, 20)), `${pickedName} | ${coverLi}`);
   check("muqova 1600px JPEG, Cloudinary'ga yuklandi", a.coverImage?.includes("bilim-manba/covers/") && coverUploads[0]?.size > 20000, `${a.coverImage} ${coverUploads[0]?.size}`);
-  check("muqova muallifi, litsenziyasi va bazasi Manbalarda", /Muqova rasmi: <a href="https:[^"]+"[^>]*>[^<]+<\/a> — [^,]+, (CC|Public|Pexels)[^,]*, (Wikimedia Commons|Openverse|NASA|Pexels)/.test(coverLi), coverLi);
+  // Muallif nomida vergul bo'lishi mumkin ("NASA, CXC, Melissa Weiss")
+  check("muqova muallifi, litsenziyasi va bazasi Manbalarda", /Muqova rasmi: <a href="https:[^"]+"[^>]*>[^<]+<\/a> — .+, (CC|Public|Pexels)[^,]*, (Wikimedia Commons|Openverse|NASA|Pexels)<\/li>$/.test(coverLi), coverLi);
   // Xavfsizlik: unsafe ro'yxatidagi rasm tanlanmaydi, yakuniy tekshiruv o'tkaziladi
   const name0 = visionReqs[0]?.user.match(/ 0\) (.*?) — /)?.[1] ?? "@@";
   check("Gemini 'unsafe' degan 0-rasm reytingda 1-o'rinda bo'lsa ham tanlanmadi", !coverLi.includes(name0.slice(0, 20)), name0);
