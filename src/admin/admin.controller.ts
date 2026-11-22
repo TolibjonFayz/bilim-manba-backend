@@ -33,7 +33,6 @@ import { PublishingService } from '../publishing/publishing.service';
 import { DigestService } from '../publishing/digest.service';
 import { AudioService } from '../audio/audio.service';
 import { MailerService } from '../mailer/mailer.service';
-import { IgRepostService } from '../publishing/ig-repost.service';
 import { memoryStorage } from 'multer';
 
 @ApiTags('Admin')
@@ -56,7 +55,6 @@ export class AdminController {
     private digest: DigestService,
     private audio: AudioService,
     private mailer: MailerService,
-    private igRepost: IgRepostService,
   ) {}
 
   // Dashboard statistika
@@ -308,29 +306,6 @@ export class AdminController {
   @Delete('alerts/telegram')
   alertsUnlink() {
     return this.alerts.unlink();
-  }
-
-  // Instagram postlari → Telegram kanal (har N kunda bittadan)
-  @Get('ig-repost')
-  igRepostStatus() {
-    return this.igRepost.status();
-  }
-
-  @Put('ig-repost')
-  igRepostUpdate(
-    @Body() body: { enabled?: boolean; days?: number; hour?: number },
-  ) {
-    return this.igRepost.update(body ?? {});
-  }
-
-  @Post('ig-repost/send')
-  async igRepostSend() {
-    try {
-      const r = await this.igRepost.postNext();
-      return { sent: Boolean(r), post: r };
-    } catch (err: any) {
-      throw new BadRequestException(err?.message ?? 'Yuborilmadi');
-    }
   }
 
   // Audio maqolalar (Gemini TTS): holat, sozlama, ovoz namunasi, bitta maqola

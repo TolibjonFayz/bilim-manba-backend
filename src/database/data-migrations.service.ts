@@ -132,6 +132,10 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
     );
+    // Instagram → Telegram qayta yuborish olib tashlandi (2026-11-22) — eski sozlamalar
+    await this.sequelize
+      .query("DELETE FROM app_settings WHERE key LIKE 'ig\\_tg\\_%'")
+      .catch(() => {});
     // Audio maqolalar (AudioService): Gemini TTS → MP3 (R2)
     await this.sequelize.query(
       `CREATE TABLE IF NOT EXISTS article_audio (

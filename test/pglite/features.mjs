@@ -1,5 +1,5 @@
 // 2026-11 yangi imkoniyatlar: Google bilan kirish, maqolaga fayl biriktirish,
-// Instagram → Telegram (har N kunda), email holati va tarqatma natijasi.
+// email holati va tarqatma natijasi.
 // Tashqi xizmatlar (Google, Instagram, Telegram, R2, SMTP) — soxta.
 import { PGlite } from "@electric-sql/pglite";
 import { PGLiteSocketServer } from "@electric-sql/pglite-socket";
@@ -24,7 +24,6 @@ const { AuthModule } = require(BE + "dist/auth/auth.module");
 const { UsersModule } = require(BE + "dist/users/users.module");
 const { CloudflareService } = require(BE + "dist/cloudflare/cloudflare.service");
 const { PublishingService, isMailable } = require(BE + "dist/publishing/publishing.service");
-const { IgRepostService } = require(BE + "dist/publishing/ig-repost.service");
 const { InstagramService } = require(BE + "dist/publishing/instagram.service");
 const { TelegramService } = require(BE + "dist/publishing/telegram.service");
 const { MailerService } = require(BE + "dist/mailer/mailer.service");
@@ -97,7 +96,6 @@ app.setGlobalPrefix("api");
 app.useGlobalPipes(new ValidationPipe({ whitelist: true, transform: true }));
 await app.init();
 clearTimeout(app.get(QuizService).timer); clearTimeout(app.get(DraftsService).timer); clearTimeout(app.get(ChannelQuizService).timer);
-const ig = app.get(IgRepostService); clearTimeout(ig.timer);
 await app.listen(0);
 const BASE = `http://127.0.0.1:${app.getHttpServer().address().port}/api`;
 
@@ -178,40 +176,6 @@ const r1 = await pub.sendNewsletter({ title: "T2", slug: "t2", excerpt: "e", cov
 check("tarqatma: ketma-ket, natija hisoblanadi", r1.sent === 1 && r1.failed === 1 && r1.error === "535 auth failed" && n === 2);
 const mail2 = await call("GET", "/admin/mail", { token: adminTok });
 check("admin: oxirgi tarqatma natijasi ko'rinadi", mail2.data.lastNewsletter?.title === "T2" && mail2.data.lastNewsletter.sent === 1 && mail2.data.subscribers === 2);
-
-// --- Instagram → Telegram ---
-const igs = app.get(InstagramService), tg = app.get(TelegramService);
-const media = [
-  { id: "m3", media_type: "VIDEO", media_url: "https://cdn/v3.mp4", caption: "Video post", permalink: "https://instagram.com/p/3", timestamp: "2026-10-12T10:00:00+0000" },
-  { id: "m1", media_type: "IMAGE", media_url: "https://cdn/1.jpg", caption: "Birinchi post " + "x".repeat(1200), permalink: "https://instagram.com/p/1", timestamp: "2026-10-10T10:00:00+0000" },
-  { id: "m2", media_type: "CAROUSEL_ALBUM", caption: "Albom", permalink: "https://instagram.com/p/2", timestamp: "2026-10-11T10:00:00+0000", children: [{ media_type: "IMAGE", media_url: "https://cdn/2a.jpg" }, { media_type: "VIDEO", media_url: "https://cdn/2b.mp4" }] },
-];
-igs.listMedia = async () => media;
-const sentCalls = [];
-let failNext = 0;
-tg.call = async (method, body) => { if (failNext > 0) { failNext--; throw new Error("Telegram sendPhoto: Bad Request: wrong file"); } sentCalls.push({ method, body }); return { ok: true }; };
-
-const st0 = await call("GET", "/admin/ig-repost", { token: adminTok });
-check("ig-repost: standart — yoqilgan, 3 kun, 3 ta navbatda, eng eskisi birinchi", st0.data.enabled === true && st0.data.days === 3 && st0.data.pending === 3 && st0.data.next.id === "m1", JSON.stringify(st0.data).slice(0, 200));
-const T = (iso) => new Date(iso);
-check("vaqt: Toshkentda 11:00 — hali emas", (await ig.runIfDue(T("2026-11-16T06:00:00Z"))) === "not-due");
-check("vaqt: 12:00 dan keyin — yuboriladi", (await ig.runIfDue(T("2026-11-16T07:30:00Z"))) === "sent");
-const c1 = sentCalls[0];
-check("rasm: sendPhoto, kanalga, havola bilan, 1024 belgidan oshmaydi", c1.method === "sendPhoto" && c1.body.chat_id === "@kanal" && c1.body.photo === "https://cdn/1.jpg" && c1.body.caption.endsWith("https://instagram.com/p/1") && c1.body.caption.length <= 1024);
-check("vaqt: ertasiga — hali 3 kun o'tmagan", (await ig.runIfDue(T("2026-11-17T08:00:00Z"))) === "not-due");
-check("vaqt: 3 kundan keyin — keyingisi (albom)", (await ig.runIfDue(T("2026-11-19T07:30:00Z"))) === "sent" && sentCalls[1].method === "sendMediaGroup" && sentCalls[1].body.media.length === 2 && sentCalls[1].body.media[1].type === "video" && sentCalls[1].body.media[0].caption.includes("Albom"));
-const send = await call("POST", "/admin/ig-repost/send", { token: adminTok });
-check("admin 'hozir yuborish': video → sendVideo", send.data.sent === true && sentCalls[2].method === "sendVideo" && sentCalls[2].body.video === "https://cdn/v3.mp4");
-check("hammasi yuborilgach navbat bo'sh, takror yo'q", (await call("POST", "/admin/ig-repost/send", { token: adminTok })).data.sent === false && sentCalls.length === 3);
-media.push({ id: "m4", media_type: "IMAGE", media_url: "https://cdn/4.jpg", caption: "Yangi", permalink: "https://instagram.com/p/4", timestamp: "2026-11-20T10:00:00+0000" });
-failNext = 3;
-for (let i = 0; i < 3; i++) await call("POST", "/admin/ig-repost/send", { token: adminTok });
-const st1 = await call("GET", "/admin/ig-repost", { token: adminTok });
-check("3 marta yuborilmagan post tashlab o'tiladi (navbat tiqilmaydi)", st1.data.pending === 0 && st1.data.sentCount === 3);
-const up2 = await call("PUT", "/admin/ig-repost", { token: adminTok, body: { enabled: false, days: 5, hour: 9 } });
-check("sozlash: o'chirish, 5 kun, 9:00", up2.data.enabled === false && up2.data.days === 5 && up2.data.hour === 9 && (await ig.runIfDue(T("2026-12-30T07:30:00Z"))) === "not-due");
-check("sozlash: noto'g'ri qiymatlar e'tiborsiz", (await call("PUT", "/admin/ig-repost", { token: adminTok, body: { days: 0, hour: 25 } })).data.days === 5);
-check("ig-repost: oddiy foydalanuvchiga yopiq", (await call("GET", "/admin/ig-repost", { token: userTok })).status === 403);
 
 // --- Resend HTTP API (Render SMTP portlarini yopadi) ---
 const resendCalls = [];

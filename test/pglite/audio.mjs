@@ -19,7 +19,6 @@ const { ArticlesService } = require(BE + "dist/articles/articles.service");
 const { DraftsService } = require(BE + "dist/drafts/drafts.service");
 const { QuizService } = require(BE + "dist/quiz/quiz.service");
 const { ChannelQuizService } = require(BE + "dist/publishing/channel-quiz.service");
-const { IgRepostService } = require(BE + "dist/publishing/ig-repost.service");
 const { DigestService } = require(BE + "dist/publishing/digest.service");
 const { AudioService } = require(BE + "dist/audio/audio.service");
 const { speechText, chunkText, findAudio, toPcm, joinPcm, toMp3 } = require(BE + "dist/audio/audio-tools");
@@ -98,7 +97,7 @@ const mod = await Test.createTestingModule({
 }).compile();
 const app = mod.createNestApplication({ logger: ["error"] });
 await app.init();
-for (const S of [QuizService, DraftsService, ChannelQuizService, IgRepostService, DigestService]) clearTimeout(app.get(S).timer);
+for (const S of [QuizService, DraftsService, ChannelQuizService, DigestService]) clearTimeout(app.get(S).timer);
 const audio = app.get(AudioService); clearTimeout(audio.timer);
 const instances = new Set([audio, app.get(ArticlesService).audio, app.get(AdminService).audio]);
 check("AudioService bitta nusxa (fon jarayoni ikki marta ishlamaydi)", instances.size === 1, String(instances.size));
