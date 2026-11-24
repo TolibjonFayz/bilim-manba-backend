@@ -330,6 +330,12 @@ export class AdminController {
     return this.audio.sample(String(body?.voice ?? ''));
   }
 
+  // Navbatni hozir ishga tushirish (pauza va kunlik limitga qaramay, fonda)
+  @Post('audio/run')
+  audioRun() {
+    return this.audio.runNow();
+  }
+
   // Bitta maqolani hozir ovozlashtirish (fonda — 1–5 daqiqa; Cloudflare 100 s da uzadi)
   @Post('audio/generate/:id')
   audioGenerate(@Param('id') id: string) {

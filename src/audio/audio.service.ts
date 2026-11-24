@@ -130,6 +130,24 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
   ) {}
 
   private feedCache?: { at: number; items: AudioFeedItem[] };
+  /** Oxirgi tekshiruv (admin kartasida: jarayon nima qildi va nega) */
+  private lastTick: {
+    at: string;
+    result: string;
+    reason: string;
+    articleId?: number;
+  } | null = null;
+  private nextCheckAt: string | null = null;
+
+  private note(
+    now: Date,
+    result: 'done' | 'skipped' | 'failed' | 'idle',
+    reason: string,
+    articleId?: number,
+  ) {
+    this.lastTick = { at: now.toISOString(), result, reason, articleId };
+    return result;
+  }
 
   onModuleInit() {
     this.timer = setTimeout(() => void this.loop(), BOOT_DELAY_MS);
@@ -163,6 +181,16 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
     }
     this.timer = setTimeout(() => void this.loop(), TICK_MS);
     this.timer.unref();
+    this.nextCheckAt = new Date(Date.now() + TICK_MS).toISOString();
+  }
+
+  /** Admin: pauza va kunlik limitga qaramay hozir bitta maqola (fonda) */
+  runNow() {
+    if (this.running) return { started: false, reason: 'Hozir ishlayapti' };
+    void this.tick(new Date(), true).catch((err) =>
+      this.logger.warn(`Audio (qo'lda): ${err?.message}`),
+    );
+    return { started: true };
   }
 
   // ---------- sozlamalar ----------
@@ -443,17 +471,27 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
    */
   async tick(
     now = new Date(),
+    force = false,
   ): Promise<'done' | 'skipped' | 'failed' | 'idle'> {
-    if (this.running || !this.key) return 'skipped';
-    if ((await this.get(K.enabled)) !== 'on') return 'skipped';
+    if (this.running)
+      return this.note(now, 'skipped', 'oldingisi hali ishlayapti');
+    if (!this.key) return this.note(now, 'skipped', "GEMINI_API_KEY yo'q");
+    if ((await this.get(K.enabled)) !== 'on')
+      return this.note(now, 'skipped', "o'chirilgan");
     const pause = await this.get(K.pauseUntil);
-    if (pause && new Date(pause) > now) return 'skipped';
+    if (!force && pause && new Date(pause) > now)
+      return this.note(now, 'skipped', 'limit pauzasi');
     const today = tashkentDay(now);
     const [day, count] = String((await this.get(K.day)) ?? '').split(':');
     const done = day === today ? Number(count) || 0 : 0;
     const next = await this.nextArticle();
-    if (!next) return 'idle';
-    if (!next.fresh && done >= this.dailyMax) return 'skipped';
+    if (!next) return this.note(now, 'idle', 'hamma maqolalar tayyor');
+    if (!force && !next.fresh && done >= this.dailyMax)
+      return this.note(
+        now,
+        'skipped',
+        "eski maqolalar uchun kunlik limit to'ldi",
+      );
     const id = next.id;
 
     this.running = true;
@@ -467,7 +505,7 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       }
       await this.set(K.lastError, null);
       await this.set(K.pauseUntil, null);
-      return 'done';
+      return this.note(now, 'done', 'audio tayyor', id);
     } catch (err: any) {
       const msg = String(err?.message ?? err).slice(0, 300);
       await this.set(
@@ -485,7 +523,7 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
         await this.set(K.fails, JSON.stringify(fails));
       }
       this.logger.warn(`Audio yaratilmadi (${id}): ${msg}`);
-      return 'failed';
+      return this.note(now, 'failed', msg.slice(0, 160), id);
     } finally {
       this.running = false;
     }
@@ -579,6 +617,8 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       total: Number(counts[0]?.total ?? 0),
       minutes: Math.round(Number(counts[0]?.seconds ?? 0) / 60),
       running: this.running,
+      lastTick: this.lastTick,
+      nextCheckAt: this.nextCheckAt,
     };
   }
 }
