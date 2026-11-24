@@ -57,6 +57,25 @@ const K = {
  * Gemini kunlik limiti Tinch okeani vaqti bilan yarim tunda yangilanadi
  * (≈ 08:00 UTC = 13:00 Toshkent). Kunlik limit tugasa — shu vaqtgacha kutiladi.
  */
+/**
+ * Limit tugaganda qachon qayta urinish: Google xatoda aniq vaqtni aytadi
+ * ("Please retry in 16h20m53s" / "retry in 42.5s") — shundan 2 daqiqa
+ * keyin. Aytilmagan bo'lsa: kunlik limit → yangilanish vaqti, aks holda 1 soat.
+ */
+export function resumeAfterLimit(msg: string, now: Date) {
+  const m = /retry in\s*(?:(\d+)h)?\s*(?:(\d+)m(?!s))?\s*(?:([\d.]+)s)?/i.exec(
+    msg,
+  );
+  const ms = m
+    ? ((Number(m[1] ?? 0) * 60 + Number(m[2] ?? 0)) * 60 + Number(m[3] ?? 0)) *
+      1000
+    : 0;
+  if (ms > 0) return new Date(now.getTime() + ms + 2 * 60 * 1000);
+  return /day|daily|per ?day/i.test(msg)
+    ? nextQuotaReset(now)
+    : new Date(now.getTime() + PAUSE_MS);
+}
+
 export function nextQuotaReset(now: Date) {
   const t = new Date(now);
   t.setUTCHours(8, 5, 0, 0);
@@ -441,9 +460,7 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
         JSON.stringify({ at: now.toISOString(), articleId: id, message: msg }),
       );
       if (err instanceof TtsError && err.rateLimited) {
-        const until = /day|daily|per ?day|kun/i.test(msg)
-          ? nextQuotaReset(now)
-          : new Date(now.getTime() + PAUSE_MS);
+        const until = resumeAfterLimit(msg, now);
         await this.set(K.pauseUntil, until.toISOString());
       } else {
         // Shu maqola qayta-qayta yiqilmasin (3 martadan keyin o'tkazib yuboriladi);

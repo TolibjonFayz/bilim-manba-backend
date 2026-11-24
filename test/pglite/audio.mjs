@@ -209,6 +209,10 @@ check("429 → pauza va xato matni saqlanadi", t429 === "failed" && !!stt.paused
 check("pauza davomida — urinmaydi", (await audio.tick(new Date(Date.now() + 3 * 86400e3 + 1800e3))) === "skipped");
 // Kunlik limit ("per day") → Google yangilaydigan vaqtgacha (08:05 UTC ≈ 13:05 Toshkent)
 const { nextQuotaReset } = require(BE + "dist/audio/audio.service");
+const { resumeAfterLimit } = require(BE + "dist/audio/audio.service");
+const R0 = new Date("2026-11-24T15:37:00Z");
+check("Google aytgan vaqt: 'retry in 16h20m53s' → shundan 2 daqiqa keyin", resumeAfterLimit("Rate limit exceeded for model gemini-3.8-flash-tts (limit: 10 requests per day on Free Tier). Please retry in 16h20m53s or upgrade", R0).toISOString() === new Date(R0.getTime() + (16 * 3600 + 20 * 60 + 53 + 120) * 1000).toISOString(), resumeAfterLimit("Please retry in 16h20m53s", R0).toISOString());
+check("'retry in 42.5s' → 44.5 s keyin; vaqtsiz 'per day' → 08:05 UTC; boshqa → 1 soat", resumeAfterLimit("Please retry in 42.5s.", R0).getTime() === R0.getTime() + 162500 && resumeAfterLimit("limit per day", R0).toISOString() === "2026-11-25T08:05:00.000Z" && resumeAfterLimit("quota", R0).getTime() === R0.getTime() + 3600e3);
 check("limit yangilanish vaqti: 08:05 UTC (o'tgan bo'lsa — ertasi)", nextQuotaReset(new Date("2026-11-25T03:00:00Z")).toISOString() === "2026-11-25T08:05:00.000Z" && nextQuotaReset(new Date("2026-11-25T09:00:00Z")).toISOString() === "2026-11-26T08:05:00.000Z");
 await audio.settings({ enabled: true }); clearTimeout(audio.timer);
 mode = "429day";
