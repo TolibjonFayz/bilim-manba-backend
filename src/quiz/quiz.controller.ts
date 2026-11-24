@@ -13,11 +13,15 @@ import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import { OptionalJwtGuard } from '../auth/guards/optional-jwt.guard';
 import { Period, QuizPointsService } from './quiz-points.service';
 import { QuizService } from './quiz.service';
+import { isGuestId } from './quiz-guests';
 import { RateLimit } from '../common/rate-limit';
 
 const PERIODS: Period[] = ['week', 'month', 'all'];
 
 // Test ballari reytingi: ochiq; token bo'lsa — o'z o'rni ham qaytadi
+// Mehmon ID: brauzer yaratgan UUID (bo'lmasa yoki noto'g'ri bo'lsa — e'tiborsiz)
+const guestOf = (v: unknown) => (isGuestId(v) ? v.toLowerCase() : undefined);
+
 @ApiTags('Quiz')
 @Controller('quiz')
 export class QuizController {
@@ -34,40 +38,44 @@ export class QuizController {
   @Post('check/:slug')
   check(
     @Param('slug') slug: string,
-    @Body() body: { i?: number; choice?: number },
+    @Body() body: { i?: number; choice?: number; guest?: string },
     @Request() req: any,
   ) {
+    const userId = req.user?.userId;
     return this.quiz.check(
       slug,
       Number(body?.i),
       Number(body?.choice),
-      req.user?.userId,
+      userId ? { userId } : { guestId: guestOf(body?.guest) },
     );
   }
 
-  // Mehmon sifatida yechilgan test — ro'yxatdan o'tgach bir marta ballga
-  @ApiOperation({ summary: 'Mehmon natijasini yangi akkauntga saqlash' })
+  // Mehmon kirdi/ro'yxatdan o'tdi: uning ballari akkauntga ko'chiriladi
+  @ApiOperation({ summary: "Mehmon ballarini akkauntga ko'chirish" })
   @ApiBearerAuth()
   @RateLimit(10, 60)
   @UseGuards(JwtAuthGuard)
-  @Post('claim')
-  claim(
-    @Body() body: { slug?: string; answers?: number[] },
-    @Request() req: any,
-  ) {
-    return this.quiz.claim(
-      req.user.userId,
-      String(body?.slug ?? ''),
-      body?.answers,
-    );
+  @Post('merge')
+  merge(@Body() body: { guest?: string }, @Request() req: any) {
+    const guestId = guestOf(body?.guest);
+    if (!guestId) return { merged: 0, points: 0 };
+    return this.points.merge(req.user.userId, guestId);
   }
 
   @ApiOperation({ summary: 'Test ballari reytingi: week | month | all' })
   @UseGuards(OptionalJwtGuard)
   @Get('leaderboard')
-  leaderboard(@Query('period') period: string, @Request() req: any) {
+  leaderboard(
+    @Query('period') period: string,
+    @Query('guest') guest: string,
+    @Request() req: any,
+  ) {
     const p = PERIODS.includes(period as Period) ? (period as Period) : 'week';
-    return this.points.leaderboard(p, req.user?.userId);
+    const userId = req.user?.userId;
+    return this.points.leaderboard(
+      p,
+      userId ? { userId } : { guestId: guestOf(guest) },
+    );
   }
 
   @ApiOperation({ summary: 'Mening ballarim (profil): umumiy, hafta, oy' })

@@ -32,6 +32,9 @@ import { FileInterceptor } from '@nestjs/platform-express';
 import { PublishingService } from '../publishing/publishing.service';
 import { DigestService } from '../publishing/digest.service';
 import { AudioService } from '../audio/audio.service';
+import { InjectModel } from '@nestjs/sequelize';
+import { Article } from '../articles/models/article.model';
+import { Category } from '../categories/models/category.model';
 import { MailerService } from '../mailer/mailer.service';
 import { memoryStorage } from 'multer';
 
@@ -54,6 +57,7 @@ export class AdminController {
     private publishing: PublishingService,
     private digest: DigestService,
     private audio: AudioService,
+    @InjectModel(Article) private articleModel: typeof Article,
     private mailer: MailerService,
   ) {}
 
@@ -349,6 +353,24 @@ export class AdminController {
   @Put('mail/digest')
   digestToggle(@Body() body: { enabled?: boolean }) {
     return this.digest.setEnabled(body?.enabled !== false);
+  }
+
+  // Kanal posti ko'rinishini sinash: eng so'nggi maqola posti adminning
+  // shaxsiy Telegram chatiga (kanalga emas) yuboriladi
+  @Post('telegram/preview')
+  async telegramPreview() {
+    const a = await this.articleModel.findOne({
+      where: { status: 'published' },
+      order: [['createdAt', 'DESC']],
+      include: [{ model: Category, attributes: ['name'] }],
+    });
+    if (!a) throw new BadRequestException("Chop etilgan maqola yo'q");
+    try {
+      const plain: any = a.get({ plain: true });
+      return await this.alerts.previewPost(plain);
+    } catch (err: any) {
+      throw new BadRequestException(String(err?.message ?? err).slice(0, 300));
+    }
   }
 
   // Sinov xati — adminning o'z emailiga

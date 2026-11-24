@@ -20,6 +20,7 @@ import { RolesGuard } from '../auth/guards/roles.guard';
 import { ArticlesService } from './articles.service';
 import { RateLimit, takeToken } from '../common/rate-limit';
 import { clientIp } from '../common/client-ip';
+import { isGuestId } from '../quiz/quiz-guests';
 
 /** ?q=a&q=b yoki ?q[x]=y kabi g'alati qiymatlar bazaga yetib bormasin */
 const oneString = (v: unknown, max: number): string | undefined =>
@@ -101,7 +102,7 @@ export class ArticlesController {
   @Post('quiz-result/:slug')
   quizResult(
     @Param('slug') slug: string,
-    @Body() body: { correct?: number; answers?: number[] },
+    @Body() body: { correct?: number; answers?: number[]; guest?: string },
     @Request() req: any,
   ) {
     return this.articlesService.quizResult(
@@ -109,6 +110,7 @@ export class ArticlesController {
       Number(body?.correct),
       body?.answers,
       req.user?.userId,
+      isGuestId(body?.guest) ? body.guest : undefined,
     );
   }
 

@@ -132,6 +132,41 @@ export class DataMigrationsService implements OnModuleInit {
     await this.sequelize.query(
       'CREATE INDEX IF NOT EXISTS quiz_scores_created_idx ON quiz_scores ("createdAt")',
     );
+    // Mehmon o'yinchilar (ro'yxatdan o'tmaganlar): taxallus, tanlovlar, ballar.
+    // Kirsa — ballari akkauntga ko'chiriladi (QuizPointsService.merge)
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS quiz_guests (
+        "guestId" VARCHAR(40) PRIMARY KEY,
+        name VARCHAR(60) NOT NULL,
+        "userId" INTEGER,
+        "mergedAt" TIMESTAMPTZ,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now()
+      )`,
+    );
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS quiz_guest_picks (
+        "guestId" VARCHAR(40) NOT NULL,
+        "articleId" INTEGER NOT NULL,
+        idx SMALLINT NOT NULL,
+        choice SMALLINT NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY ("guestId", "articleId", idx)
+      )`,
+    );
+    await this.sequelize.query(
+      `CREATE TABLE IF NOT EXISTS quiz_guest_scores (
+        "guestId" VARCHAR(40) NOT NULL,
+        "articleId" INTEGER NOT NULL,
+        correct INTEGER NOT NULL,
+        total INTEGER NOT NULL,
+        points INTEGER NOT NULL,
+        "createdAt" TIMESTAMPTZ NOT NULL DEFAULT now(),
+        PRIMARY KEY ("guestId", "articleId")
+      )`,
+    );
+    await this.sequelize.query(
+      'CREATE INDEX IF NOT EXISTS quiz_guest_scores_created_idx ON quiz_guest_scores ("createdAt")',
+    );
     // Instagram → Telegram qayta yuborish olib tashlandi (2026-11-22) — eski sozlamalar
     await this.sequelize
       .query("DELETE FROM app_settings WHERE key LIKE 'ig\\_tg\\_%'")

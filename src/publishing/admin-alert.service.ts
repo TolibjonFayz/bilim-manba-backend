@@ -164,6 +164,22 @@ export class AdminAlertService {
     return { linked: Boolean(await this.chatId()) };
   }
 
+  /**
+   * Kanal posti qanday ko'rinishini sinash: maqola postini kanalga emas,
+   * adminning shaxsiy chatiga yuboradi (Instant View tugmasini bosib ko'rish uchun).
+   */
+  async previewPost(a: Parameters<TelegramService['sendArticle']>[0]) {
+    if (!this.telegram.hasBot)
+      throw new Error('Telegram bot sozlanmagan (TELEGRAM_BOT_TOKEN)');
+    const chat = await this.chatId();
+    if (!chat)
+      throw new Error(
+        'Shaxsiy xabarlar ulanmagan — admin panelda "Shaxsiy xabarlarni ulash" ni bosing',
+      );
+    await this.telegram.sendArticle(a, chat);
+    return { sent: true, instantView: this.telegram.instantView };
+  }
+
   /** Xabar yuboradi; ulanmagan bo'lsa jim o'tadi. Hech qachon xato otmaydi */
   async send(html: string, button?: { text: string; path: string }) {
     try {

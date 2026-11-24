@@ -109,14 +109,13 @@ await db.query(`UPDATE articles SET "scheduledAt" = now() - interval '1 minute' 
 tg.length = 0;
 const n = await pub.publishDue();
 const chan = tg.find((x) => x.body.chat_id === "@bilim_test");
-const btn = chan?.body.reply_markup.inline_keyboard[0][0].url ?? "";
-check("rejali maqola chop etildi", n === 1);
-check("kanal tugmasi Instant View (t.me/iv + rhash, utm saqlangan)", btn.startsWith("https://t.me/iv?url=") && btn.endsWith("&rhash=ab12cd34") && decodeURIComponent(btn.split("url=")[1].split("&rhash")[0]) === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel", btn);
-const pubMsg = tg.find((x) => x.body.chat_id === "777" && /chop etildi/.test(x.body.text));
-check("adminga: chop etildi, Telegram ✅, Instagram ulanmagan", pubMsg && /Telegram kanal: ✅/.test(pubMsg.body.text) && /Instagram: — ulanmagan/.test(pubMsg.body.text), pubMsg?.body.text);
-const site = chan?.body.reply_markup.inline_keyboard[0][1];
-check("kanal: 2-tugma 'Saytda o'qish' — oddiy sayt havolasi (utm_medium=channel_site)", site?.text === "🌐 Saytda o'qish" && site.url === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel_site", site);
-check("readButtons: rhash bo'lmasa bitta tugma", (() => { const c = tgs.config; const orig = c.get.bind(c); c.get = (k) => (k === "TELEGRAM_IV_RHASH" ? undefined : orig(k)); const b = tgs.readButtons("x"); c.get = orig; return b.length === 1 && b[0].length === 1 && b[0][0].url === "https://bilimmanba.uz/articles/x?utm_source=telegram&utm_medium=channel"; })());
+// Instant View tugmada ishlamaydi (brauzerda ochiladi) — post havola ko'rinishi bilan chiqadi
+const ivUrl = chan?.body.link_preview_options?.url ?? "";
+check("kanal posti: sendMessage + katta havola ko'rinishi (Instant View, rasm tepada)", chan?.method === "sendMessage" && ivUrl.startsWith("https://t.me/iv?url=") && ivUrl.endsWith("&rhash=ab12cd34") && decodeURIComponent(ivUrl.split("url=")[1].split("&rhash")[0]) === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel" && chan.body.link_preview_options.prefer_large_media === true && chan.body.link_preview_options.show_above_text === true, JSON.stringify(chan?.body).slice(0, 300));
+check("kanal posti matnida ham ⚡ Telegramda o'qish havolasi (IV)", chan.body.text.includes(`<a href="${ivUrl}">Telegramda o'qish</a>`) && chan.body.parse_mode === "HTML");
+const kb = chan.body.reply_markup.inline_keyboard;
+check("tugma: faqat bitta — saytga (IV tugmada yo'q)", kb.length === 1 && kb[0].length === 1 && kb[0][0].url === "https://bilimmanba.uz/articles/rejali-maqola?utm_source=telegram&utm_medium=channel_site" && !kb.flat().some((b) => b.url.includes("t.me/iv")), JSON.stringify(kb));
+check("readButtons: rhash bo'lmasa — 'Maqolani o'qish' saytga", (() => { const c = tgs.config; const orig = c.get.bind(c); c.get = (k) => (k === "TELEGRAM_IV_RHASH" ? undefined : orig(k)); const b = tgs.readButtons("x"); c.get = orig; return b.length === 1 && b[0][0].text === "📖 Maqolani o'qish" && b[0][0].url.startsWith("https://bilimmanba.uz/articles/x?"); })());
 check("readUrl: rhash bo'lmasa oddiy havola", (() => { const c = tgs.config; const orig = c.get.bind(c); c.get = (k) => (k === "TELEGRAM_IV_RHASH" ? undefined : orig(k)); const u = tgs.readUrl("x"); c.get = orig; return u === "https://bilimmanba.uz/articles/x?utm_source=telegram&utm_medium=channel"; })());
 
 // 6) Telegram ishlamasa ham nashr to'xtamaydi

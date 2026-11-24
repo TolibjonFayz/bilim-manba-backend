@@ -57,34 +57,42 @@ export class TelegramService {
     return `${this.siteUrl}/articles/${slug}?utm_source=telegram&utm_medium=${medium}`;
   }
 
+  private get rhash() {
+    return this.config.get<string>('TELEGRAM_IV_RHASH')?.trim() || '';
+  }
+
+  /** Instant View yoqilganmi (shablon rhash'i Render'da) */
+  get instantView(): boolean {
+    return Boolean(this.rhash);
+  }
+
   /**
-   * Kanaldagi "O'qish" tugmasi. TELEGRAM_IV_RHASH bo'lsa — Instant View:
-   * maqola Telegram ichida bir zumda ochiladi (shablon instantview.telegram.org
-   * da yaratiladi, rhash o'sha yerdan olinadi; shablon: docs/instant-view.txt).
+   * Instant View havolasi (t.me/iv?url=…&rhash=…). MUHIM: bunday havola
+   * Telegram ichida faqat XABAR MATNIDA yoki havola ko'rinishida (link
+   * preview) ochiladi; inline TUGMAGA qo'yilsa — brauzerda ochiladi. Shuning
+   * uchun IV tugmada emas, post havola ko'rinishida beriladi (sendArticle).
    */
   readUrl(slug: string, medium?: string) {
     const url = this.articleUrl(slug, medium);
-    const rhash = this.config.get<string>('TELEGRAM_IV_RHASH')?.trim();
-    return rhash
-      ? `https://t.me/iv?url=${encodeURIComponent(url)}&rhash=${encodeURIComponent(rhash)}`
+    return this.rhash
+      ? `https://t.me/iv?url=${encodeURIComponent(url)}&rhash=${encodeURIComponent(this.rhash)}`
       : url;
   }
 
   /**
-   * Post tugmalari. Instant View yoqilgan bo'lsa ikkita: "Telegramda o'qish"
-   * (tezkor, Telegram ichida) va "Saytda o'qish" (saytga tashrif — testlar,
-   * ball, o'xshash maqolalar). IV bo'lmasa — bitta oddiy sayt havolasi.
+   * Post ostidagi tugma — faqat saytga (testlar, ball, o'xshash maqolalar).
+   * Telegram ichida o'qish — postning o'zidagi "⚡ INSTANT VIEW" tugmasi.
    */
   readButtons(slug: string, medium = 'channel') {
-    const iv = this.readUrl(slug, medium);
     const site = this.articleUrl(slug, `${medium}_site`);
-    if (iv === this.articleUrl(slug, medium)) {
-      return [[{ text: "📖 Maqolani o'qish", url: iv }]];
-    }
     return [
       [
-        { text: "⚡ Telegramda o'qish", url: iv },
-        { text: "🌐 Saytda o'qish", url: site },
+        {
+          text: this.rhash
+            ? "🌐 Saytda o'qish · test va ball"
+            : "📖 Maqolani o'qish",
+          url: site,
+        },
       ],
     ];
   }
@@ -182,9 +190,15 @@ export class TelegramService {
     return true;
   }
 
-  /** Maqolani kanalga yuboradi. Sozlanmagan bo'lsa false qaytaradi. */
-  async sendArticle(a: TelegramArticle): Promise<boolean> {
-    if (!this.configured) {
+  /**
+   * Maqolani kanalga (yoki chatId berilsa — o'sha chatga, masalan admin
+   * sinovi) yuboradi. Instant View yoqilgan bo'lsa: matnli xabar + tepada
+   * katta havola ko'rinishi (rasm va "⚡ INSTANT VIEW" tugmasi) — maqola
+   * Telegram ichida ochiladi. Aks holda — rasm + izoh.
+   */
+  async sendArticle(a: TelegramArticle, chatId?: string): Promise<boolean> {
+    const chat = chatId ?? this.channel;
+    if (!this.token || !chat) {
       this.logger.warn(
         "Telegram sozlanmagan (TELEGRAM_BOT_TOKEN / TELEGRAM_CHANNEL_ID) — post o'tkazib yuborildi",
       );
@@ -194,12 +208,29 @@ export class TelegramService {
     const reply_markup = {
       inline_keyboard: this.readButtons(a.slug),
     };
+
+    if (this.rhash) {
+      const iv = this.readUrl(a.slug);
+      await this.call('sendMessage', {
+        chat_id: chat,
+        text: `${caption}\n\n⚡ <a href="${iv}">Telegramda o'qish</a>`,
+        parse_mode: 'HTML',
+        link_preview_options: {
+          url: iv,
+          prefer_large_media: true,
+          show_above_text: true,
+        },
+        reply_markup,
+      });
+      return true;
+    }
+
     const photo = this.coverUrl(a.coverImage);
 
     if (photo) {
       try {
         await this.call('sendPhoto', {
-          chat_id: this.channel,
+          chat_id: chat,
           photo,
           caption,
           parse_mode: 'HTML',
@@ -214,7 +245,7 @@ export class TelegramService {
       }
     }
     await this.call('sendMessage', {
-      chat_id: this.channel,
+      chat_id: chat,
       text: caption,
       parse_mode: 'HTML',
       reply_markup,

@@ -288,7 +288,10 @@ export class PublishingService implements OnModuleInit, OnModuleDestroy {
   async mailStatus() {
     const [status, subs, last] = await Promise.all([
       this.mailer.status(),
-      this.subscribers.getAllActive().then((r) => r.length).catch(() => null),
+      this.subscribers
+        .getAllActive()
+        .then((r) => r.length)
+        .catch(() => null),
       this.articleModel.sequelize
         ?.query<{ value: string }>(
           `SELECT value FROM app_settings WHERE key = 'newsletter_last'`,

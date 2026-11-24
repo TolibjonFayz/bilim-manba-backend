@@ -21,9 +21,13 @@ const TICK_MS = 20 * 60 * 1000;
 /** Bepul tarif daqiqasiga bir necha so'rovga ruxsat beradi — bo'laklar orasida tanaffus */
 const CHUNK_GAP_MS = 21_000;
 /** Limit (429) tugasa — shuncha kutiladi */
-const PAUSE_MS = 6 * HOUR_MS;
+const PAUSE_MS = HOUR_MS;
+/** Bitta maqola shuncha marta yiqilsa — navbatdan o'tkazib yuboriladi */
+const MAX_FAILS = 3;
 const DEFAULT_DAILY = 5;
-const CHUNK_CHARS = 3000;
+// ~8 daqiqalik nutq (Gemini bitta javobda ~11 daqiqagacha beradi): kamroq so'rov —
+// bepul kunlik limit ko'proq maqolaga yetadi
+const CHUNK_CHARS = 6500;
 
 /** Admin tanlashi mumkin bo'lgan ovozlar (Gemini prebuilt) */
 export const VOICES = [
@@ -46,7 +50,19 @@ const K = {
   lastError: 'audio_last_error',
   day: 'audio_day', // "2026-11-22:3" — bugun nechta maqola ovozlashtirildi
   telegram: 'audio_telegram', // 'off' — kanalga audio yuborilmaydi
+  fails: 'audio_fails', // {"139": 2} — maqola necha marta yiqilgani
 };
+
+/**
+ * Gemini kunlik limiti Tinch okeani vaqti bilan yarim tunda yangilanadi
+ * (≈ 08:00 UTC = 13:00 Toshkent). Kunlik limit tugasa — shu vaqtgacha kutiladi.
+ */
+export function nextQuotaReset(now: Date) {
+  const t = new Date(now);
+  t.setUTCHours(8, 5, 0, 0);
+  if (t <= now) t.setTime(t.getTime() + 24 * HOUR_MS);
+  return t;
+}
 
 /** Faqat yangi maqolalar audiosi kanalga chiqadi (eskilari kanalni to'ldirib yubormasin) */
 const TG_FRESH_DAYS = 3;
@@ -347,21 +363,50 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
     return items;
   }
 
-  /** Navbatdagi maqola: avval oxirgi 3 kunda chop etilganlar, keyin eng ko'p o'qilganlar */
-  async nextArticleId(): Promise<number | null> {
-    const [row] = await this.sequelize.query<{ id: number }>(
-      `SELECT a.id FROM articles a
-       LEFT JOIN article_audio au ON au."articleId" = a.id
-       WHERE a.status = 'published' AND au."articleId" IS NULL
-       ORDER BY (COALESCE(a."scheduledAt", a."createdAt") > now() - interval '3 days') DESC,
-                a."viewCount" DESC, a.id DESC
-       LIMIT 1`,
-      { type: QueryTypes.SELECT },
-    );
-    return row?.id ?? null;
+  private async fails(): Promise<Record<string, number>> {
+    try {
+      return JSON.parse((await this.get(K.fails)) ?? '{}') ?? {};
+    } catch {
+      return {};
+    }
   }
 
-  /** Davriy ish: yoqilgan, pauza yo'q va kunlik limit tugamagan bo'lsa — bitta maqola */
+  /**
+   * Navbatdagi maqola: avval yangilari (oxirgi 3 kun, eng yangisi birinchi),
+   * keyin eng ko'p o'qilgan eskilari. 3 marta yiqilganlar o'tkazib yuboriladi.
+   */
+  async nextArticle(): Promise<{ id: number; fresh: boolean } | null> {
+    const skip = Object.entries(await this.fails())
+      .filter(([, n]) => n >= MAX_FAILS)
+      .map(([id]) => Number(id));
+    const [row] = await this.sequelize.query<{ id: number; fresh: boolean }>(
+      `SELECT a.id,
+              COALESCE(a."scheduledAt", a."createdAt") > now() - interval '${TG_FRESH_DAYS} days' AS fresh
+       FROM articles a
+       LEFT JOIN article_audio au ON au."articleId" = a.id
+       WHERE a.status = 'published' AND au."articleId" IS NULL
+         ${skip.length ? 'AND a.id NOT IN (:skip)' : ''}
+       ORDER BY fresh DESC,
+                CASE WHEN COALESCE(a."scheduledAt", a."createdAt") > now() - interval '${TG_FRESH_DAYS} days'
+                     THEN COALESCE(a."scheduledAt", a."createdAt") END DESC NULLS LAST,
+                a."viewCount" DESC, a.id DESC
+       LIMIT 1`,
+      { replacements: { skip }, type: QueryTypes.SELECT },
+    );
+    return row ? { id: Number(row.id), fresh: Boolean(row.fresh) } : null;
+  }
+
+  /** Eski nom (testlar) */
+  async nextArticleId() {
+    return (await this.nextArticle())?.id ?? null;
+  }
+
+  /**
+   * Davriy ish (har 20 daqiqada): bitta maqola. Yangi maqolalar kunlik
+   * limitga kirmaydi — chop etilishi bilan ovozlashtiriladi; kunlik limit
+   * (AUDIO_DAILY_MAX) faqat eski maqolalar uchun. Gemini limiti tugasa —
+   * kunlik bo'lsa yangilanish vaqtigacha, aks holda 1 soat kutadi.
+   */
   async tick(
     now = new Date(),
   ): Promise<'done' | 'skipped' | 'failed' | 'idle'> {
@@ -372,15 +417,22 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
     const today = tashkentDay(now);
     const [day, count] = String((await this.get(K.day)) ?? '').split(':');
     const done = day === today ? Number(count) || 0 : 0;
-    if (done >= this.dailyMax) return 'skipped';
-    const id = await this.nextArticleId();
-    if (!id) return 'idle';
+    const next = await this.nextArticle();
+    if (!next) return 'idle';
+    if (!next.fresh && done >= this.dailyMax) return 'skipped';
+    const id = next.id;
 
     this.running = true;
     try {
       await this.generateFor(id);
-      await this.set(K.day, `${today}:${done + 1}`);
+      if (!next.fresh) await this.set(K.day, `${today}:${done + 1}`);
+      const fails = await this.fails();
+      if (fails[id]) {
+        delete fails[id];
+        await this.set(K.fails, JSON.stringify(fails));
+      }
       await this.set(K.lastError, null);
+      await this.set(K.pauseUntil, null);
       return 'done';
     } catch (err: any) {
       const msg = String(err?.message ?? err).slice(0, 300);
@@ -389,13 +441,16 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
         JSON.stringify({ at: now.toISOString(), articleId: id, message: msg }),
       );
       if (err instanceof TtsError && err.rateLimited) {
-        await this.set(
-          K.pauseUntil,
-          new Date(now.getTime() + PAUSE_MS).toISOString(),
-        );
+        const until = /day|daily|per ?day|kun/i.test(msg)
+          ? nextQuotaReset(now)
+          : new Date(now.getTime() + PAUSE_MS);
+        await this.set(K.pauseUntil, until.toISOString());
       } else {
-        // Shu maqola yana-yana yiqilmasin: bugungi hisobga qo'shiladi
-        await this.set(K.day, `${today}:${done + 1}`);
+        // Shu maqola qayta-qayta yiqilmasin (3 martadan keyin o'tkazib yuboriladi);
+        // kunlik limitni yemaydi
+        const fails = await this.fails();
+        fails[id] = (fails[id] ?? 0) + 1;
+        await this.set(K.fails, JSON.stringify(fails));
       }
       this.logger.warn(`Audio yaratilmadi (${id}): ${msg}`);
       return 'failed';
@@ -442,6 +497,7 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       await this.set(K.enabled, body.enabled ? 'on' : 'off');
       if (body.enabled) {
         await this.set(K.pauseUntil, null);
+        await this.set(K.fails, null);
         // Darhol bitta maqola (keyin har 20 daqiqada)
         if (this.timer) clearTimeout(this.timer);
         this.timer = setTimeout(() => void this.loop(), 3000);
@@ -466,6 +522,13 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       ),
     ]);
     const telegramSetting = await this.get(K.telegram);
+    const failMap = await this.fails();
+    const [fresh] = await this.sequelize.query<{ n: string }>(
+      `SELECT COUNT(*) AS n FROM articles a LEFT JOIN article_audio au ON au."articleId" = a.id
+       WHERE a.status = 'published' AND au."articleId" IS NULL
+         AND COALESCE(a."scheduledAt", a."createdAt") > now() - interval '${TG_FRESH_DAYS} days'`,
+      { type: QueryTypes.SELECT },
+    );
     const [d, c] = String(day ?? '').split(':');
     return {
       configured: Boolean(this.key),
@@ -474,6 +537,8 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
       voices: VOICES,
       dailyMax: this.dailyMax,
       telegram: telegramSetting !== 'off',
+      freshPending: Number(fresh?.n ?? 0),
+      skipped: Object.values(failMap).filter((n) => n >= MAX_FAILS).length,
       telegramConfigured: this.telegram.configured,
       today: d === tashkentDay() ? Number(c) || 0 : 0,
       pausedUntil: pause && new Date(pause) > new Date() ? pause : null,

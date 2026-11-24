@@ -201,7 +201,7 @@ export class ChannelQuizService implements OnModuleInit, OnModuleDestroy {
           [
             {
               text: "📖 Javobini maqolada o'qing",
-              url: this.telegram.readUrl(p.slug, 'quiz'),
+              url: this.telegram.articleUrl(p.slug, 'quiz'),
             },
           ],
         ],

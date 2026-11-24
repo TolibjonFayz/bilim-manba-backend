@@ -80,6 +80,9 @@ export function createTts(opts: {
   const f = opts.fetch ?? fetch;
   const models = opts.models?.length ? opts.models : TTS_MODELS;
   let known: { model: string; api: 'interactions' | 'generate' } | null = null;
+  /** Bu jarayonda limiti (429) tugagan modellar */
+  const exhausted = new Set<string>();
+  let limitError: TtsError | null = null;
 
   const once = async (
     model: string,
@@ -111,27 +114,46 @@ export function createTts(opts: {
       return known;
     },
     async speak(text: string, voice: string) {
-      if (known) return once(known.model, known.api, text, voice);
+      const asTts = (err: any) =>
+        err instanceof TtsError
+          ? err
+          : new TtsError(String(err?.message ?? err));
+      if (known) {
+        try {
+          return await once(known.model, known.api, text, voice);
+        } catch (err: any) {
+          const e = asTts(err);
+          if (e.status !== 429) throw e;
+          // Shu modelning limiti tugadi — keyingi modelga (limiti alohida)
+          exhausted.add(known.model);
+          limitError = e;
+          known = null;
+        }
+      }
       let last: TtsError | null = null;
       for (const model of models) {
+        if (exhausted.has(model)) continue;
         for (const api of ['interactions', 'generate'] as const) {
           try {
             const r = await once(model, api, text, voice);
             known = { model, api };
             return r;
           } catch (err: any) {
-            const e =
-              err instanceof TtsError
-                ? err
-                : new TtsError(String(err?.message ?? err));
-            // Limit yoki kalit xatosi — boshqa shakl/model yordam bermaydi
-            if (e.status === 429 || e.status === 401 || e.status === 403)
-              throw e;
+            const e = asTts(err);
+            // Kalit xatosi — boshqa shakl/model yordam bermaydi
+            if (e.status === 401 || e.status === 403) throw e;
+            if (e.status === 429) {
+              exhausted.add(model);
+              limitError = e;
+              break;
+            }
             last = e;
           }
         }
       }
-      throw last ?? new TtsError('TTS ishlamadi');
+      // Hamma modellarning limiti tugagan bo'lsa — 429 (kutish kerak)
+      if (limitError && models.every((m) => exhausted.has(m))) throw limitError;
+      throw last ?? limitError ?? new TtsError('TTS ishlamadi');
     },
   };
 }

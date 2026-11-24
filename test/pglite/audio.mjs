@@ -66,6 +66,9 @@ const fakeFetch = async (url, init) => {
   calls.push({ url: String(url), body, key: init.headers["x-goog-api-key"] });
   const json = (status, j) => new Response(JSON.stringify(j), { status });
   if (mode === "429") return json(429, { error: { message: "Resource has been exhausted (quota)" } });
+  if (mode === "429day") return json(429, { error: { message: "Quota exceeded for metric: generate_requests_per_model_per_day, limit: 15" } });
+  const isFlash = String(url).includes("gemini-3.8-flash-tts:") || body.model === "gemini-3.8-flash-tts";
+  if (mode === "flash429" && isFlash) return json(429, { error: { message: "Quota exceeded for metric: requests per day" } });
   if (String(url).endsWith("/interactions")) return mode === "interactions-ok" ? json(200, { outputs: [{ type: "audio", mime_type: "audio/wav", data: wav(sine(1)).toString("base64") }] }) : json(404, { error: { message: "Not found" } });
   if (String(url).includes("gemini-3.8-flash-tts:generateContent") && mode === "only-lite") return json(404, { error: { message: "model not found" } });
   return json(200, geminiJson(1));
@@ -84,7 +87,12 @@ await tts.speak("Salom", "Kore");
 check("tts: asosiy model yo'q → lite model", tts.route.model === "gemini-3.8-flash-lite-tts");
 mode = "429"; tts = createTts({ key: "k1", fetch: fakeFetch });
 let e429 = null; try { await tts.speak("x", "Kore"); } catch (e) { e429 = e; }
-check("tts: 429 → rateLimited, boshqa model sinalmaydi", e429?.rateLimited === true && calls.at(-1).url.endsWith("/interactions"), e429?.message);
+check("tts: hamma modellar 429 → rateLimited", e429?.rateLimited === true, e429?.message);
+mode = "flash429"; calls.length = 0; tts = createTts({ key: "k1", fetch: fakeFetch });
+r = await tts.speak("Salom", "Charon");
+check("tts: asosiy modelning limiti tugasa → lite model (limiti alohida)", r.pcm.length === RATE && tts.route.model === "gemini-3.8-flash-lite-tts", JSON.stringify(tts.route));
+await tts.speak("Yana", "Charon");
+check("tts: limiti tugagan model qayta sinalmaydi", !calls.slice(-1).some((c) => c.url.includes("gemini-3.8-flash-tts:")));
 
 // ---------- 3) Nest: navbat, saqlash, sahifa ----------
 const db = await PGlite.create();
@@ -156,12 +164,18 @@ await audio.tick();
 const aRow = (await db.query(`SELECT seconds FROM article_audio WHERE "articleId" = $1`, [A.id])).rows[0];
 check("keyingisi — eng ko'p o'qilgan; uzun matn bir necha bo'lakda", !!aRow && calls.length >= 2, `${calls.length} so'rov`);
 check("eski (10 kunlik) maqola audiosi kanalga chiqmaydi", audioPosts().length === 1);
-check("kunlik limit (2) — uchinchisi bugun yo'q", (await audio.tick()) === "skipped" && (await audio.status()).today === 2);
+check("yangi maqola kunlik limitga kirmadi; eskilar: 2/2", (await audio.tick()) === "done" && (await audio.status()).today === 2, String((await audio.status()).today));
+// Limit to'lgan kun: yana bitta eski va bitta YANGI maqola chiqdi
+const D = await mk("eski2", 5);
+const E = await mk("yangi2", 0);
+await db.query(`UPDATE articles SET "createdAt" = now() - interval '2 hours' WHERE id = $1`, [E.id]);
+check("limit to'lgan bo'lsa ham YANGI maqola darhol ovozlashtiriladi", (await audio.tick()) === "done" && (await db.query(`SELECT 1 FROM article_audio WHERE "articleId" = $1`, [E.id])).rows.length === 1);
+check("eski maqola — bugun limit to'lgan, kutadi", (await audio.tick()) === "skipped");
 // Ertaga
-check("ertaga — davom etadi", (await audio.tick(new Date(Date.now() + 86400e3))) === "done");
+check("ertaga — eski maqola ham tayyor bo'ladi", (await audio.tick(new Date(Date.now() + 86400e3))) === "done" && (await db.query(`SELECT 1 FROM article_audio WHERE "articleId" = $1`, [D.id])).rows.length === 1);
 check("hammasi tayyor — idle", (await audio.tick(new Date(Date.now() + 2 * 86400e3))) === "idle");
 const stDone = await audio.status();
-check("holat: 3/3 tayyor, xato yo'q", stDone.done === 3 && stDone.total === 3 && stDone.lastError === null && stDone.configured, JSON.stringify(stDone).slice(0, 200));
+check("holat: 5/5 tayyor, xato yo'q", stDone.done === 5 && stDone.total === 5 && stDone.lastError === null && stDone.configured, JSON.stringify(stDone).slice(0, 200));
 
 // Podkast lentasi
 await db.query(`UPDATE article_audio SET bytes = NULL WHERE "articleId" = $1`, [A.id]);
@@ -169,7 +183,7 @@ const feedFetch = audio.fetchOverride;
 audio.fetchOverride = async (url, init) => (init?.method === "HEAD" ? new Response(null, { headers: { "content-length": "123456" } }) : feedFetch(url, init));
 audio.feedCache = undefined;
 const feed = await app.get(AudioController).feed();
-check("lenta: 3 ta, eng yangisi birinchi, maydonlar to'liq", feed.length === 3 && feed[0].slug === "yangi" && feed.every((f) => f.url && f.seconds >= 1 && f.title && f.published) && feed[0].category === "Fan", JSON.stringify(feed[0]).slice(0, 200));
+check("lenta: 5 ta, eng yangisi birinchi, maydonlar to'liq", feed.length === 5 && feed[0].slug === "yangi2" && feed.every((f) => f.url && f.seconds >= 1 && f.title && f.published) && feed[0].category === "Fan", JSON.stringify(feed[0]).slice(0, 200));
 check("lenta: noma'lum hajm R2'dan olinadi va saqlanadi", feed.find((f) => f.slug === "mashhur").bytes === 123456 && Number((await db.query(`SELECT bytes FROM article_audio WHERE "articleId" = $1`, [A.id])).rows[0].bytes) === 123456);
 audio.fetchOverride = feedFetch;
 // Kanalga yuborishni o'chirish
@@ -192,7 +206,26 @@ mode = "429";
 const t429 = await audio.tick(new Date(Date.now() + 3 * 86400e3));
 const stt = await audio.status();
 check("429 → pauza va xato matni saqlanadi", t429 === "failed" && !!stt.pausedUntil && /exhausted/.test(stt.lastError.message), JSON.stringify(stt.lastError));
-check("pauza davomida — urinmaydi", (await audio.tick(new Date(Date.now() + 3 * 86400e3 + 3600e3))) === "skipped");
+check("pauza davomida — urinmaydi", (await audio.tick(new Date(Date.now() + 3 * 86400e3 + 1800e3))) === "skipped");
+// Kunlik limit ("per day") → Google yangilaydigan vaqtgacha (08:05 UTC ≈ 13:05 Toshkent)
+const { nextQuotaReset } = require(BE + "dist/audio/audio.service");
+check("limit yangilanish vaqti: 08:05 UTC (o'tgan bo'lsa — ertasi)", nextQuotaReset(new Date("2026-11-25T03:00:00Z")).toISOString() === "2026-11-25T08:05:00.000Z" && nextQuotaReset(new Date("2026-11-25T09:00:00Z")).toISOString() === "2026-11-26T08:05:00.000Z");
+await audio.settings({ enabled: true }); clearTimeout(audio.timer);
+mode = "429day";
+const T5 = new Date("2027-01-10T03:00:00Z");
+await audio.tick(T5);
+check("kunlik limit tugasa — yangilanish vaqtigacha pauza", (await audio.get("audio_pause_until")) === "2027-01-10T08:05:00.000Z", await audio.get("audio_pause_until"));
+// Xato (limit emas) — kunlik limitni yemaydi, 3 martadan keyin maqola o'tkazib yuboriladi
+await audio.settings({ enabled: true }); clearTimeout(audio.timer);
+mode = "broken";
+const origFetch = audio.fetchOverride;
+audio.fetchOverride = async (url, init) => (mode === "broken" ? new Response(JSON.stringify({ candidates: [{ content: { parts: [{ text: "ovoz yo'q" }] } }] }), { status: 200 }) : origFetch(url, init));
+const T6 = new Date("2027-01-11T03:00:00Z");
+const failId = await audio.nextArticleId();
+for (let i = 0; i < 3; i++) await audio.tick(T6);
+const st6 = await audio.status();
+check("xato maqola: 3 marta → o'tkazib yuboriladi, kunlik hisob o'zgarmadi", st6.skipped === 1 && (await audio.nextArticleId()) !== failId && st6.today === 0, JSON.stringify({ skipped: st6.skipped, today: st6.today }));
+audio.fetchOverride = origFetch;
 
 // Ovoz namunasi
 mode = "generate";

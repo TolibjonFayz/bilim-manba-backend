@@ -78,8 +78,9 @@ export class ArticlesService {
     correct: number,
     answers?: unknown,
     userId?: number,
+    guestId?: string,
   ) {
-    return this.quiz.recordResult(slug, correct, answers, userId);
+    return this.quiz.recordResult(slug, correct, answers, { userId, guestId });
   }
 
   // Maqola slug bo'yicha qidirish
