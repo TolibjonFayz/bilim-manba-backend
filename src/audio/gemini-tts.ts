@@ -151,9 +151,11 @@ export function createTts(opts: {
           }
         }
       }
-      // Hamma modellarning limiti tugagan bo'lsa — 429 (kutish kerak)
-      if (limitError && models.every((m) => exhausted.has(m))) throw limitError;
-      throw last ?? limitError ?? new TtsError('TTS ishlamadi');
+      // Biror model limit (429) desa, qolganlari esa boshqa sabab bilan
+      // ishlamasa — bu ham "limit tugadi, kutish kerak". Aks holda maqola
+      // nohaq "xato" deb belgilanib, navbatdan chiqib ketardi.
+      if (limitError) throw limitError;
+      throw last ?? new TtsError('TTS ishlamadi');
     },
   };
 }

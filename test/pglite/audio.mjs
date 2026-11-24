@@ -69,6 +69,7 @@ const fakeFetch = async (url, init) => {
   if (mode === "429day") return json(429, { error: { message: "Quota exceeded for metric: generate_requests_per_model_per_day, limit: 15" } });
   const isFlash = String(url).includes("gemini-3.8-flash-tts:") || body.model === "gemini-3.8-flash-tts";
   if (mode === "flash429" && isFlash) return json(429, { error: { message: "Quota exceeded for metric: requests per day" } });
+  if (mode === "flash429lite404") return isFlash ? json(429, { error: { message: "Rate limit exceeded (limit: 10 requests per day). Please retry in 1h2m3s" } }) : json(404, { error: { message: "model not found" } });
   if (String(url).endsWith("/interactions")) return mode === "interactions-ok" ? json(200, { outputs: [{ type: "audio", mime_type: "audio/wav", data: wav(sine(1)).toString("base64") }] }) : json(404, { error: { message: "Not found" } });
   if (String(url).includes("gemini-3.8-flash-tts:generateContent") && mode === "only-lite") return json(404, { error: { message: "model not found" } });
   return json(200, geminiJson(1));
@@ -93,6 +94,9 @@ r = await tts.speak("Salom", "Charon");
 check("tts: asosiy modelning limiti tugasa → lite model (limiti alohida)", r.pcm.length === RATE && tts.route.model === "gemini-3.8-flash-lite-tts", JSON.stringify(tts.route));
 await tts.speak("Yana", "Charon");
 check("tts: limiti tugagan model qayta sinalmaydi", !calls.slice(-1).some((c) => c.url.includes("gemini-3.8-flash-tts:")));
+mode = "flash429lite404"; tts = createTts({ key: "k1", fetch: fakeFetch });
+let mixed = null; try { await tts.speak("x", "Charon"); } catch (e) { mixed = e; }
+check("tts: biri limit (429), boshqasi boshqa xato → baribir 'limit' (maqola xato deb belgilanmaydi)", mixed?.rateLimited === true && /retry in 1h2m3s/.test(mixed.message), mixed?.message);
 
 // ---------- 3) Nest: navbat, saqlash, sahifa ----------
 const db = await PGlite.create();

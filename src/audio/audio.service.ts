@@ -134,6 +134,21 @@ export class AudioService implements OnModuleInit, OnModuleDestroy {
   onModuleInit() {
     this.timer = setTimeout(() => void this.loop(), BOOT_DELAY_MS);
     this.timer.unref();
+    void this.resetFailsOnce();
+  }
+
+  /**
+   * 2026-11-25: limit (429) xatolari ba'zan "maqola xatosi" deb hisoblangan
+   * edi — yangi maqolalar navbatdan chiqib ketmasin, hisob bir marta tozalanadi.
+   */
+  private async resetFailsOnce() {
+    try {
+      if (await this.get('once_audio_fails_reset_v1')) return;
+      await this.set(K.fails, null);
+      await this.set('once_audio_fails_reset_v1', new Date().toISOString());
+    } catch {
+      /* jadval hali yo'q bo'lsa — keyingi ishga tushishda */
+    }
   }
 
   onModuleDestroy() {
